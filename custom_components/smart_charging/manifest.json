@@ -1,0 +1,14 @@
+{
+  "domain": "smart_charging",
+  "name": "Smart Charging",
+  "codeowners": [
+    "@daniel-jo"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/daniel-jo/smart-charging/blob/main/README.md",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "requirements": [],
+  "version": "1.0.0",
+  "issue_tracker": "https://github.com/daniel-jo/smart-charging/issues"
+}

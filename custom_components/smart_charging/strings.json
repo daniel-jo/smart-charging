@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Charging",
+        "description": "Select which entities the integration should use for price data, charger control and an optional deadline.",
+        "data": {
+          "spot_prices_entity": "Spot prices forecast sensor",
+          "charger_operation_mode_entity": "Charger operation mode switch",
+          "charger_resume_button_entity": "Resume charging button",
+          "charger_stop_button_entity": "Stop charging button",
+          "charger_mode_sensor_entity": "Charger mode sensor",
+          "deadline_entity": "Deadline input_datetime (optional)"
+        }
+      },
+      "params": {
+        "title": "Charging parameters",
+        "description": "Set the price thresholds and charging limits.",
+        "data": {
+          "threshold_start": "Start charging below this price (kr/kWh)",
+          "threshold_stop": "Stop charging above this price (kr/kWh)",
+          "charger_max_kw": "Max charger power (kW)",
+          "battery_need_kwh": "Battery energy need (kWh, optional)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "entities": {
+        "title": "Smart Charging options",
+        "description": "Update entities and charging parameters.",
+        "data": {
+          "spot_prices_entity": "Spot prices forecast sensor",
+          "charger_operation_mode_entity": "Charger operation mode switch",
+          "charger_resume_button_entity": "Resume charging button",
+          "charger_stop_button_entity": "Stop charging button",
+          "charger_mode_sensor_entity": "Charger mode sensor",
+          "deadline_entity": "Deadline input_datetime (optional)",
+          "threshold_start": "Start charging below this price (kr/kWh)",
+          "threshold_stop": "Stop charging above this price (kr/kWh)",
+          "charger_max_kw": "Max charger power (kW)",
+          "battery_need_kwh": "Battery energy need (kWh, optional)"
+        }
+      },
+      "params": {
+        "title": "Charging parameters",
+        "description": "Set the price thresholds and charging limits.",
+        "data": {
+          "threshold_start": "Start charging below this price (kr/kWh)",
+          "threshold_stop": "Stop charging above this price (kr/kWh)",
+          "charger_max_kw": "Max charger power (kW)",
+          "battery_need_kwh": "Battery energy need (kWh, optional)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Charging",
+        "description": "Välj entiteter för prisdata, laddarstyrning och deadline.",
+        "data": {
+          "spot_prices_entity": "Spotpris-prognos-sensor",
+          "charger_operation_mode_entity": "Laddarens driftläge (strömbrytare)",
+          "charger_resume_button_entity": "Knapp: återuppta laddning",
+          "charger_stop_button_entity": "Knapp: stoppa laddning",
+          "charger_mode_sensor_entity": "Laddarens läge-sensor",
+          "deadline_entity": "Deadline input_datetime (valfritt)"
+        }
+      },
+      "params": {
+        "title": "Laddparametrar",
+        "description": "Ställ in priströsklar och laddgränser.",
+        "data": {
+          "threshold_start": "Starta laddning under detta pris (kr/kWh)",
+          "threshold_stop": "Stoppa laddning över detta pris (kr/kWh)",
+          "charger_max_kw": "Max laddareffekt (kW)",
+          "battery_need_kwh": "Energibehov (kWh, valfritt)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "entities": {
+        "title": "Smart Charging – alternativ",
+        "description": "Uppdatera entiteter och parametrar.",
+        "data": {
+          "spot_prices_entity": "Spotpris-prognos-sensor",
+          "charger_operation_mode_entity": "Laddarens driftläge (strömbrytare)",
+          "charger_resume_button_entity": "Knapp: återuppta laddning",
+          "charger_stop_button_entity": "Knapp: stoppa laddning",
+          "charger_mode_sensor_entity": "Laddarens läge-sensor",
+          "deadline_entity": "Deadline input_datetime (valfritt)",
+          "threshold_start": "Starta laddning under (kr/kWh)",
+          "threshold_stop": "Stoppa laddning över (kr/kWh)",
+          "charger_max_kw": "Max laddareffekt (kW)",
+          "battery_need_kwh": "Energibehov (kWh, valfritt)"
+        }
+      },
+      "params": {
+        "title": "Laddparametrar",
+        "description": "Ställ in priströsklar och laddgränser.",
+        "data": {
+          "threshold_start": "Starta laddning under (kr/kWh)",
+          "threshold_stop": "Stoppa laddning över (kr/kWh)",
+          "charger_max_kw": "Max laddareffekt (kW)",
+          "battery_need_kwh": "Energibehov (kWh, valfritt)"
+        }
+      }
+    }
+  }
+}
+      

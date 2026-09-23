@@ -1,0 +1,15 @@
+# --- macOS ------------------------------------------------------------------
+.DS_Store
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# --- Secrets -----------------------------------------------------------------
+# This integration has no API keys. Do NOT commit price fixture files with
+# real price data either — use .sample files for checked-in examples.
+.env
+dryrun_prices.json
