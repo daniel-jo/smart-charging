@@ -3,24 +3,29 @@
     "step": {
       "user": {
         "title": "Smart Charging",
-        "description": "Välj entiteter för prisdata, laddarstyrning och deadline.",
+        "description": "Välj entiteter för prisdata, bilens laddnivå och laddarstyrning.",
         "data": {
           "spot_prices_entity": "Spotpris-prognos-sensor",
+          "soc_entity": "Bilens batterinivå-sensor (0-100 %)",
           "charger_operation_mode_entity": "Laddarens driftläge (strömbrytare)",
           "charger_resume_button_entity": "Knapp: återuppta laddning",
           "charger_stop_button_entity": "Knapp: stoppa laddning",
-          "charger_mode_sensor_entity": "Laddarens läge-sensor",
-          "deadline_entity": "Deadline input_datetime (valfritt)"
+          "charger_mode_sensor_entity": "Laddarens läge-sensor"
         }
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in priströsklar, laddgränser och valutan för dina prisdata.",
+        "description": "Ställ in batterigränser, daglig förbrukning, veckans 100 %-laddning och valutan för dina prisdata. Inga priströsklar behövs – billiga timmar härleds ur prognosen.",
         "data": {
-          "threshold_start": "Starta laddning under detta pris (per kWh)",
-          "threshold_stop": "Stoppa laddning över detta pris (per kWh)",
+          "min_soc": "Minsta batterinivå (%), planera aldrig under detta",
+          "max_soc": "Maximal batterinivå (%), normal laddgräns",
+          "battery_capacity_kwh": "Batterikapacitet (kWh)",
+          "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling",
           "charger_max_kw": "Max laddareffekt (kW)",
-          "battery_need_kwh": "Energibehov (kWh, valfritt)",
+          "weekly_full_charge": "Ladda till 100 % ungefär en gång i veckan (billigaste fönstret)",
+          "min_days_between_full": "Minsta antal dagar mellan två 100 %-laddningar",
+          "deadline_time": "Klar till (klockslag, valfritt) - laddning klar före detta",
+          "deadline_restart_minutes": "Återstart efter passerad deadline (minuter, 0 = ingen)",
           "currency": "Prisvaluta"
         }
       }
@@ -33,29 +38,29 @@
         "description": "Uppdatera entiteter och parametrar.",
         "data": {
           "spot_prices_entity": "Spotpris-prognos-sensor",
+          "soc_entity": "Bilens batterinivå-sensor (0-100 %)",
           "charger_operation_mode_entity": "Laddarens driftläge (strömbrytare)",
           "charger_resume_button_entity": "Knapp: återuppta laddning",
           "charger_stop_button_entity": "Knapp: stoppa laddning",
-          "charger_mode_sensor_entity": "Laddarens läge-sensor",
-          "deadline_entity": "Deadline input_datetime (valfritt)",
-          "threshold_start": "Starta laddning under (per kWh)",
-          "threshold_stop": "Stoppa laddning över (per kWh)",
-          "charger_max_kw": "Max laddareffekt (kW)",
-          "battery_need_kwh": "Energibehov (kWh, valfritt)"
+          "charger_mode_sensor_entity": "Laddarens läge-sensor"
         }
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in priströsklar, laddgränser och valutan för dina prisdata.",
+        "description": "Ställ in batterigränser, daglig förbrukning, veckans 100 %-laddning och valutan för dina prisdata. Inga priströsklar behövs – billiga timmar härleds ur prognosen.",
         "data": {
-          "threshold_start": "Starta laddning under (per kWh)",
-          "threshold_stop": "Stoppa laddning över (per kWh)",
+          "min_soc": "Minsta batterinivå (%), planera aldrig under detta",
+          "max_soc": "Maximal batterinivå (%), normal laddgräns",
+          "battery_capacity_kwh": "Batterikapacitet (kWh)",
+          "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling",
           "charger_max_kw": "Max laddareffekt (kW)",
-          "battery_need_kwh": "Energibehov (kWh, valfritt)",
+          "weekly_full_charge": "Ladda till 100 % ungefär en gång i veckan (billigaste fönstret)",
+          "min_days_between_full": "Minsta antal dagar mellan två 100 %-laddningar",
+          "deadline_time": "Klar till (klockslag, valfritt) - laddning klar före detta",
+          "deadline_restart_minutes": "Återstart efter passerad deadline (minuter, 0 = ingen)",
           "currency": "Prisvaluta"
         }
       }
     }
   }
 }
-      

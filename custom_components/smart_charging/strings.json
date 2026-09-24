@@ -3,24 +3,29 @@
     "step": {
       "user": {
         "title": "Smart Charging",
-        "description": "Select which entities the integration should use for price data, charger control and an optional deadline.",
+        "description": "Select entities for price data, battery SOC and charger control.",
         "data": {
-          "spot_prices_entity": "Spot prices forecast sensor",
+          "spot_prices_entity": "Spot price forecast sensor",
+          "soc_entity": "Car battery SOC sensor (0-100 %)",
           "charger_operation_mode_entity": "Charger operation mode switch",
           "charger_resume_button_entity": "Resume charging button",
           "charger_stop_button_entity": "Stop charging button",
-          "charger_mode_sensor_entity": "Charger mode sensor",
-          "deadline_entity": "Deadline input_datetime (optional)"
+          "charger_mode_sensor_entity": "Charger mode sensor"
         }
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set the price thresholds, charging limits and the currency of your price data.",
+        "description": "Set battery limits, daily consumption, the weekly 100 % boost and the currency of your price data. No price thresholds are needed - cheap hours are derived from the forecast.",
         "data": {
-          "threshold_start": "Start charging below this price (per kWh)",
-          "threshold_stop": "Stop charging above this price (per kWh)",
+          "min_soc": "Minimum battery level (%), never plan below this",
+          "max_soc": "Maximum battery level (%), normal charging target",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute",
           "charger_max_kw": "Max charger power (kW)",
-          "battery_need_kwh": "Battery energy need (kWh, optional)",
+          "weekly_full_charge": "Charge to 100 % about once a week (cheapest window)",
+          "min_days_between_full": "Minimum days between two 100 % charges",
+          "deadline_time": "Ready by (time, optional) - charging complete before this",
+          "deadline_restart_minutes": "Restart after a passed deadline (minutes, 0 = never)",
           "currency": "Price currency"
         }
       }
@@ -32,26 +37,27 @@
         "title": "Smart Charging options",
         "description": "Update entities and charging parameters.",
         "data": {
-          "spot_prices_entity": "Spot prices forecast sensor",
+          "spot_prices_entity": "Spot price forecast sensor",
+          "soc_entity": "Car battery SOC sensor (0-100 %)",
           "charger_operation_mode_entity": "Charger operation mode switch",
           "charger_resume_button_entity": "Resume charging button",
           "charger_stop_button_entity": "Stop charging button",
-          "charger_mode_sensor_entity": "Charger mode sensor",
-          "deadline_entity": "Deadline input_datetime (optional)",
-          "threshold_start": "Start charging below this price (per kWh)",
-          "threshold_stop": "Stop charging above this price (per kWh)",
-          "charger_max_kw": "Max charger power (kW)",
-          "battery_need_kwh": "Battery energy need (kWh, optional)"
+          "charger_mode_sensor_entity": "Charger mode sensor"
         }
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set the price thresholds, charging limits and the currency of your price data.",
+        "description": "Set battery limits, daily consumption, the weekly 100 % boost and the currency of your price data. No price thresholds are needed - cheap hours are derived from the forecast.",
         "data": {
-          "threshold_start": "Start charging below this price (per kWh)",
-          "threshold_stop": "Stop charging above this price (per kWh)",
+          "min_soc": "Minimum battery level (%), never plan below this",
+          "max_soc": "Maximum battery level (%), normal charging target",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute",
           "charger_max_kw": "Max charger power (kW)",
-          "battery_need_kwh": "Battery energy need (kWh, optional)",
+          "weekly_full_charge": "Charge to 100 % about once a week (cheapest window)",
+          "min_days_between_full": "Minimum days between two 100 % charges",
+          "deadline_time": "Ready by (time, optional) - charging complete before this",
+          "deadline_restart_minutes": "Restart after a passed deadline (minutes, 0 = never)",
           "currency": "Price currency"
         }
       }

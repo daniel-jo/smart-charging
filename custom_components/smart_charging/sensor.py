@@ -37,6 +37,7 @@ def _session_attrs(sessions: list) -> list[dict]:
                 "power_kw": s.power_kw,
                 "avg_price_kwh": s.avg_price_kwh,
                 "hours": s.hours,
+                "is_boost": s.is_boost,
             }
         )
     return out
@@ -96,9 +97,29 @@ class SmartChargingPlanSensor(CoordinatorEntity, SensorEntity):
             "planned_sessions": _session_attrs(plan.sessions),
             "next_action": next_action,
             "mode": self.coordinator.mode,
-            "battery_need_kwh": plan.battery_need_kwh,
             "currency": plan.currency,
             "updated": _iso(plan.updated),
+            "soc_now": plan.soc_now,
+            "min_soc": plan.min_soc,
+            "max_soc": plan.max_soc,
+            "daily_consumption_pct": plan.daily_consumption_pct,
+            "threshold_start": plan.threshold_start,
+            "threshold_stop": plan.threshold_stop,
+            "boost_scheduled": plan.boost_scheduled,
+            "last_full_charge": _iso(plan.last_full_charge),
+            "next_boost_after": _iso(plan.next_boost_after),
+            "deadline_time": plan.deadline_time,
+            "deadline_next": _iso(plan.deadline_next),
+            "deadline_restart_at": _iso(plan.deadline_restart_at),
+            "day_prices": [
+                {
+                    "date": d.date,
+                    "min_kwh": d.min_kwh,
+                    "max_kwh": d.max_kwh,
+                    "avg_kwh": d.avg_kwh,
+                }
+                for d in plan.day_prices
+            ],
         }
 
 

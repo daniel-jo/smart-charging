@@ -6,9 +6,7 @@ view. Uses the modern CalendarEntity API (2024.12+).
 
 from __future__ import annotations
 
-import logging
-from datetime import timedelta
-from typing import Any, Optional
+from typing import Optional
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.config_entries import ConfigEntry
@@ -20,7 +18,16 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, NAME, VERSION
 from .coordinator import SmartChargingCoordinator
 
-_LOGGER = logging.getLogger(__name__)
+
+def _event_summary(sess, currency: str) -> str:
+    """Human-readable calendar summary for a planned session."""
+    label = "100 %-laddning" if sess.is_boost else "EV-laddning"
+    start_local = sess.start.strftime("%H:%M")
+    end_local = sess.end.strftime("%H:%M")
+    return (
+        f"{label} {start_local}-{end_local} "
+        f"({sess.power_kw:.0f} kW, {sess.avg_price_kwh:.2f} {currency}/kWh)"
+    )
 
 
 async def async_setup_entry(
@@ -60,16 +67,10 @@ class SmartChargingPlanCalendar(CoordinatorEntity, CalendarEntity):
         currency = plan.currency
         for sess in plan.sessions:
             if sess.end > now:
-                start_local = sess.start.strftime("%H:%M")
-                end_local = sess.end.strftime("%H:%M")
-                summary = (
-                    f"EV-laddning {start_local}–{end_local} "
-                    f"({sess.power_kw:.0f} kW, {sess.avg_price_kwh:.2f} {currency}/kWh)"
-                )
                 return CalendarEvent(
                     start=sess.start,
                     end=sess.end,
-                    summary=summary,
+                    summary=_event_summary(sess, currency),
                 )
         return None
 
@@ -87,17 +88,11 @@ class SmartChargingPlanCalendar(CoordinatorEntity, CalendarEntity):
         currency = plan.currency
         for sess in plan.sessions:
             if sess.start < end_date and sess.end > start_date:
-                start_local = sess.start.strftime("%H:%M")
-                end_local = sess.end.strftime("%H:%M")
-                summary = (
-                    f"EV-laddning {start_local}–{end_local} "
-                    f"({sess.power_kw:.0f} kW, {sess.avg_price_kwh:.2f} {currency}/kWh)"
-                )
                 events.append(
                     CalendarEvent(
                         start=sess.start,
                         end=sess.end,
-                        summary=summary,
+                        summary=_event_summary(sess, currency),
                     )
                 )
         return events
