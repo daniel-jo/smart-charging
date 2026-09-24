@@ -41,7 +41,6 @@ custom_components/smart_charging/  # the HA integration
 dryrun.py                          # standalone plan check (pure stdlib)
 tests/
 └── test_helper.py                 # unit tests for helper.py (pytest)
-.env.example                       # dry-run price JSON template (no secrets)
 hacs.json                          # HACS metadata
 README.md
 ```
@@ -50,6 +49,7 @@ README.md
 
 - Tests: `python3 -m pytest tests/ -v`
 - Run tests standalone (no pytest): `python3 tests/test_helper.py`
+- Run with a built-in sample (no files needed): `python3 dryrun.py`
 - Dry-run against a price JSON fixture:
   `python3 dryrun.py --prices dryrun_prices.json --mode plan --threshold-start 0.80 --threshold-stop 0.95 --charger-max-kw 11`
 - Generate a sample price fixture:
@@ -62,11 +62,30 @@ README.md
   committing and pushing are up to the user. Do it only when the user
   explicitly asks — the "Releasing" steps below are no exception.
 
+## Version bumps
+
+- Every changeset gets a version bump before the work is left uncommitted —
+  code, test and doc-only changes alike. Bump `version` in **both**
+  `custom_components/spot_price/manifest.json` and
+  `custom_components/spot_price/const.py` (`VERSION` constant); the two must
+  always match.
+- Size the bump to the change (semver, from whatever version the working tree
+  currently carries):
+  - **major** — breaking changes: altered contracts (sensor entity IDs, the
+    pricing formula, the bundled card element name) or behaviour users depend on.
+  - **minor** — new backwards-compatible functionality: new sensors/options,
+    scheduling or behaviour improvements, new API support.
+  - **patch** — bug fixes, internal refactors, test and doc-only changes.
+- Bump only once per uncommitted changeset. Check
+  `git diff HEAD -- custom_components/spot_price/manifest.json
+  custom_components/spot_price/const.py`: if the version(s) already differ
+  from the last commit, a bump is pending for this batch — leave it alone. The
+  next bump happens on the first change made after the pending one is committed.
+
 ## Releasing
 
-1. Bump `version` in **both** `custom_components/smart_charging/manifest.json` and
-   `custom_components/smart_charging/const.py` (`VERSION` constant) — the two must
-   always match.
+1. Verify the current batch has its version bump (see "Version bumps"); bump it
+   only if the working tree does not already carry one.
 2. Commit, tag `v<version>` and push: `git push origin main --tags`.
 3. Create a GitHub Release for the tag (gh CLI or the web UI).
 
@@ -100,7 +119,8 @@ README.md
 
 ## Secrets
 
-- This integration has no API keys or secrets. `.env` does not belong here and
-  must never be committed. The `dryrun.py` reads a price JSON file, not a `.env`.
+- This integration has no API keys, secrets, or environment-variable usage.
+  `dryrun.py` needs no `.env` — without `--prices` it runs against a built-in
+  sample.
 - Keep `dryrun_prices.json` or similar fixture files gitignored if they contain
   real price data; check in `dryrun_prices.json.sample` instead.

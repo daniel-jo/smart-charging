@@ -32,12 +32,14 @@ from .const import (
     CONF_CHARGER_OPERATION_MODE,
     CONF_CHARGER_RESUME_BUTTON,
     CONF_CHARGER_STOP_BUTTON,
+    CONF_CURRENCY,
     CONF_DEADLINE_ENTITY,
     CONF_SPOT_PRICES_ENTITY,
     CONF_THRESHOLD_START,
     CONF_THRESHOLD_STOP,
     DEFAULT_BATTERY_NEED_KWH,
     DEFAULT_CHARGER_MAX_KW,
+    DEFAULT_CURRENCY,
     DEFAULT_THRESHOLD_START,
     DEFAULT_THRESHOLD_STOP,
     DEFAULT_UPDATE_INTERVAL_MINUTES,
@@ -63,6 +65,7 @@ def resolve_options(entry: ConfigEntry) -> dict:
         CONF_THRESHOLD_STOP: entry.data.get(CONF_THRESHOLD_STOP, DEFAULT_THRESHOLD_STOP),
         CONF_CHARGER_MAX_KW: entry.data.get(CONF_CHARGER_MAX_KW, DEFAULT_CHARGER_MAX_KW),
         CONF_BATTERY_NEED_KWH: entry.data.get(CONF_BATTERY_NEED_KWH, DEFAULT_BATTERY_NEED_KWH),
+        CONF_CURRENCY: entry.data.get(CONF_CURRENCY, DEFAULT_CURRENCY),
     }
     options.update(entry.options)
     return options
@@ -150,6 +153,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         price_hours = self._price_hours(opts.get(CONF_SPOT_PRICES_ENTITY, ""))
         connected = self._is_connected(opts.get(CONF_CHARGER_MODE_SENSOR, ""))
         deadline = self._deadline(opts.get(CONF_DEADLINE_ENTITY, ""))
+        currency = str(opts.get(CONF_CURRENCY, DEFAULT_CURRENCY))
 
         plan = helper.compute_plan(
             price_hours=price_hours,
@@ -161,6 +165,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             charger_max_kw=float(opts.get(CONF_CHARGER_MAX_KW, DEFAULT_CHARGER_MAX_KW)),
             battery_need_kwh=opts.get(CONF_BATTERY_NEED_KWH, DEFAULT_BATTERY_NEED_KWH),
             now=self.now,
+            currency=currency,
         )
 
         if plan.summary != self._last_summary:
@@ -200,26 +205,18 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         state = self.hass.states.get(entity_id)
         if state is None or state.state in (None, "unknown", "unavailable"):
             return []
-        hours = state.attributes.get("hours", [])
-        out: list[helper.PriceHour] = []
-        for hour in hours:
-            try:
-                start = dt_util.parse_datetime(hour["start"])
-                price = float(
-                    hour.get("sek_kwh")
-                    if "sek_kwh" in hour
-                    else hour.get("currency_kwh")
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-            if start is None:
-                continue
-            if start.tzinfo is None:
-                start = start.replace(tzinfo=dt_util.UTC)
-            else:
-                start = start.astimezone(dt_util.UTC)
-            out.append(helper.PriceHour(start=start, sek_kwh=price))
-        return out
+        hours = state.attributes.get("hours") or []
+        currency = str(self.options.get(CONF_CURRENCY, DEFAULT_CURRENCY))
+        parsed = helper.parse_price_hours(hours, currency=currency)
+        if hours and not parsed:
+            _LOGGER.warning(
+                "No hourly prices parsed from %s with currency %s — "
+                "expected prices under 'currency_kwh' or '%s_kwh'",
+                entity_id,
+                currency,
+                currency.lower(),
+            )
+        return parsed
 
     def _is_connected(self, entity_id: str) -> bool:
         """Map the charger mode sensor to a boolean 'connected'."""

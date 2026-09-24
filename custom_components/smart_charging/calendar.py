@@ -57,13 +57,14 @@ class SmartChargingPlanCalendar(CoordinatorEntity, CalendarEntity):
             return None
         # Find the first session that hasn't ended yet.
         now = self.coordinator.now  # type: ignore[union-attr]
+        currency = plan.currency
         for sess in plan.sessions:
             if sess.end > now:
                 start_local = sess.start.strftime("%H:%M")
                 end_local = sess.end.strftime("%H:%M")
                 summary = (
                     f"EV-laddning {start_local}–{end_local} "
-                    f"({sess.power_kw:.0f} kW, {sess.avg_price_sek_kwh:.2f} kr/kWh)"
+                    f"({sess.power_kw:.0f} kW, {sess.avg_price_kwh:.2f} {currency}/kWh)"
                 )
                 return CalendarEvent(
                     start=sess.start,
@@ -83,13 +84,14 @@ class SmartChargingPlanCalendar(CoordinatorEntity, CalendarEntity):
         if plan is None or not plan.sessions:
             return []
         events: list[CalendarEvent] = []
+        currency = plan.currency
         for sess in plan.sessions:
             if sess.start < end_date and sess.end > start_date:
                 start_local = sess.start.strftime("%H:%M")
                 end_local = sess.end.strftime("%H:%M")
                 summary = (
                     f"EV-laddning {start_local}–{end_local} "
-                    f"({sess.power_kw:.0f} kW, {sess.avg_price_sek_kwh:.2f} kr/kWh)"
+                    f"({sess.power_kw:.0f} kW, {sess.avg_price_kwh:.2f} {currency}/kWh)"
                 )
                 events.append(
                     CalendarEvent(

@@ -18,10 +18,12 @@ from .const import (
     CONF_CHARGER_OPERATION_MODE,
     CONF_CHARGER_RESUME_BUTTON,
     CONF_CHARGER_STOP_BUTTON,
+    CONF_CURRENCY,
     CONF_DEADLINE_ENTITY,
     CONF_SPOT_PRICES_ENTITY,
     CONF_THRESHOLD_START,
     CONF_THRESHOLD_STOP,
+    CURRENCY_OPTIONS,
     DEFAULT_BATTERY_NEED_KWH,
     DEFAULT_CHARGER_MAX_KW,
     DEFAULT_THRESHOLD_START,
@@ -65,6 +67,12 @@ def _as_float(value: Any, default: float) -> float:
 
 def _params_schema(current: dict[str, Any]) -> vol.Schema:
     """Build the parameter schema with defaults from current values."""
+    currency_default = current.get(CONF_CURRENCY)
+    currency_field = (
+        vol.Required(CONF_CURRENCY, default=currency_default)
+        if currency_default
+        else vol.Required(CONF_CURRENCY)
+    )
     return vol.Schema(
         {
             vol.Required(
@@ -90,6 +98,9 @@ def _params_schema(current: dict[str, Any]) -> vol.Schema:
                 default=_as_float(current.get(CONF_BATTERY_NEED_KWH), DEFAULT_BATTERY_NEED_KWH),
             ): selector.selector(
                 {"number": {"mode": "box", "min": 0, "max": 150, "step": 0.1}}
+            ),
+            currency_field: selector.selector(
+                {"select": {"options": list(CURRENCY_OPTIONS), "mode": "dropdown"}}
             ),
         }
     )
@@ -199,6 +210,9 @@ class SmartChargingOptionsFlow(config_entries.OptionsFlow):
                     CONF_THRESHOLD_STOP: entry_data.get(CONF_THRESHOLD_STOP, DEFAULT_THRESHOLD_STOP),
                     CONF_CHARGER_MAX_KW: entry_data.get(CONF_CHARGER_MAX_KW, DEFAULT_CHARGER_MAX_KW),
                     CONF_BATTERY_NEED_KWH: entry_data.get(CONF_BATTERY_NEED_KWH, DEFAULT_BATTERY_NEED_KWH),
+                    # Keep the stored currency (no default: legacy entries that
+                    # predate the setting are forced to choose one).
+                    CONF_CURRENCY: entry_data.get(CONF_CURRENCY),
                 }
             )
             return await self.async_step_params(None)

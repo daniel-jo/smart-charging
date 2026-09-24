@@ -8,20 +8,20 @@ tested and dry-run outside of HA (see ``tests/test_helper.py`` and
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Any, Optional
 
 
 @dataclass(frozen=True)
 class PriceHour:
-    """One hourly end-user price (already in SEK/kWh or chosen currency/kWh).
+    """One hourly price per kWh, in the configured currency.
 
     ``start`` is a timezone-aware UTC datetime, on the hour.
     """
 
     start: datetime
-    sek_kwh: float
+    price_kwh: float
 
 
 @dataclass
@@ -31,7 +31,7 @@ class ChargingSession:
     start: datetime
     end: datetime  # exclusive end (start + 1h * len(hours))
     power_kw: float
-    avg_price_sek_kwh: float
+    avg_price_kwh: float
     hours: list[dict] = field(default_factory=list)
 
 
@@ -53,6 +53,7 @@ class Plan:
     summary: str = ""
     battery_need_kwh: Optional[float] = None
     updated: Optional[datetime] = None
+    currency: str = "EUR"
 _MODE_OFF = "off"
 _MODE_PLAN = "plan"
 _MODE_LIVE = "live"
@@ -68,6 +69,37 @@ def floor_hour(dt: datetime) -> datetime:
 # ---------------------------------------------------------------------------
 
 
+def parse_price_hours(
+    raw_hours: list[dict], currency: str = "EUR"
+) -> list[PriceHour]:
+    """Parse a spot-price sensor's ``hours`` attribute into ``PriceHour``.
+
+    The price is read from the generic ``currency_kwh`` key. If that key is
+    absent, the per-currency key matching the *configured* currency is used
+    (e.g. ``sek_kwh`` only when ``currency="SEK"``). There is deliberately no
+    implicit fallback to any single currency: prices in a currency the user did
+    not select are never trusted.
+
+    ``start`` may be a naive ISO string (assumed UTC) or timezone-aware; the
+    result is always normalised to a timezone-aware UTC datetime.
+    """
+    currency_key = f"{currency.lower()}_kwh"
+    out: list[PriceHour] = []
+    for hour in raw_hours:
+        try:
+            start = _parse_iso_dt(hour["start"])
+            price = hour.get("currency_kwh")
+            if price is None:
+                price = hour.get(currency_key)
+            price = float(price)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start is None:
+            continue
+        out.append(PriceHour(start=start, price_kwh=price))
+    return out
+
+
 def compute_plan(
     *,
     price_hours: list[PriceHour],
@@ -79,6 +111,7 @@ def compute_plan(
     charger_max_kw: float,
     battery_need_kwh: Optional[float],
     now: datetime,
+    currency: str = "EUR",
 ) -> Plan:
     """Produce a charging plan from price forecasts and configuration.
 
@@ -102,6 +135,10 @@ def compute_plan(
         Energy needed (kWh). ``None`` means "charge all cheap hours".
     now
         Current time (timezone-aware).
+    currency
+        Configured price currency (e.g. ``"EUR"``). Used only for display —
+        prices are never converted, they are treated as already being in this
+        currency. Defaults to ``"EUR"``.
 
     Returns
     -------
@@ -112,6 +149,7 @@ def compute_plan(
         return Plan(
             summary="Av",
             next_action=NextAction(action="none", reason="off"),
+            currency=currency,
         )
 
     # --- Guard: not connected ----------------------------------------------
@@ -119,6 +157,7 @@ def compute_plan(
         return Plan(
             summary="Ej inkopplad",
             next_action=NextAction(action="stop", reason="disconnected"),
+            currency=currency,
         )
 
     # --- Guard: no price data ----------------------------------------------
@@ -126,6 +165,7 @@ def compute_plan(
         return Plan(
             summary="Inga data",
             next_action=NextAction(action="stop", reason="no_data"),
+            currency=currency,
         )
 
     now_hour = floor_hour(now)
@@ -148,6 +188,7 @@ def compute_plan(
             return Plan(
                 summary="Deadline passerad",
                 next_action=NextAction(action="stop", reason="deadline"),
+                currency=currency,
             )
 # ------------------------------------------------------------------
     # 1. Build cheap blocks with hysteresis.
@@ -163,13 +204,13 @@ def compute_plan(
         if in_block:
             prev = current_block[-1]
             contiguous = prev.start + timedelta(hours=1) == h.start
-            if contiguous and h.sek_kwh <= threshold_stop:
+            if contiguous and h.price_kwh <= threshold_stop:
                 current_block.append(h)
                 continue
             raw_blocks.append(current_block)
             current_block = []
             in_block = False
-        if h.sek_kwh <= threshold_start:
+        if h.price_kwh <= threshold_start:
             current_block = [h]
             in_block = True
 
@@ -197,6 +238,7 @@ def compute_plan(
         return Plan(
             summary="Ingen plan (för dyrt)",
             next_action=NextAction(action="stop", reason="threshold"),
+            currency=currency,
         )
 # ------------------------------------------------------------------
     # 3. Select blocks to satisfy battery need.
@@ -205,7 +247,7 @@ def compute_plan(
         needed_kwh = battery_need_kwh
         sorted_blocks = sorted(
             raw_blocks,
-            key=lambda b: sum(h.sek_kwh for h in b) / max(len(b), 1),
+            key=lambda b: sum(h.price_kwh for h in b) / max(len(b), 1),
         )
         selected: list[list[PriceHour]] = []
         accumulated = 0.0
@@ -231,6 +273,7 @@ def compute_plan(
         return Plan(
             summary="Ingen plan (för dyrt)",
             next_action=NextAction(action="stop", reason="threshold"),
+            currency=currency,
         )
 
     # Sort selections by time.
@@ -242,7 +285,7 @@ def compute_plan(
     for block in selections:
         if not block:
             continue
-        avg_price = sum(h.sek_kwh for h in block) / len(block)
+        avg_price = sum(h.price_kwh for h in block) / len(block)
         start = block[0].start
         end = block[-1].start + timedelta(hours=1)
         sessions.append(
@@ -250,8 +293,8 @@ def compute_plan(
                 start=start,
                 end=end,
                 power_kw=charger_max_kw,
-                avg_price_sek_kwh=round(avg_price, 4),
-                hours=[{"start": h.start, "sek_kwh": h.sek_kwh} for h in block],
+                avg_price_kwh=round(avg_price, 4),
+                hours=[{"start": h.start, "price_kwh": h.price_kwh} for h in block],
             )
         )
 
@@ -277,7 +320,7 @@ def compute_plan(
     # ------------------------------------------------------------------
     # 6. Summary (human-readable state text).
     # ------------------------------------------------------------------
-    summary = _build_summary(sessions)
+    summary = _build_summary(sessions, currency)
 
     return Plan(
         sessions=sessions,
@@ -285,6 +328,7 @@ def compute_plan(
         summary=summary,
         battery_need_kwh=battery_need_kwh,
         updated=now,
+        currency=currency,
     )
 
 
@@ -293,7 +337,22 @@ def compute_plan(
 # ---------------------------------------------------------------------------
 
 
-def _build_summary(sessions: list[ChargingSession]) -> str:
+def _parse_iso_dt(value: Any) -> Optional[datetime]:
+    """Parse an ISO timestamp string into a timezone-aware UTC datetime.
+
+    A trailing ``Z`` (UTC) is accepted, and naive timestamps are assumed to be
+    in UTC.
+    """
+    try:
+        start = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if start.tzinfo is None:
+        return start.replace(tzinfo=timezone.utc)
+    return start.astimezone(timezone.utc)
+
+
+def _build_summary(sessions: list[ChargingSession], currency: str) -> str:
     """Short human-readable state text."""
     if not sessions:
         return "Ingen plan (för dyrt)"
@@ -304,9 +363,8 @@ def _build_summary(sessions: list[ChargingSession]) -> str:
         end_local = s.end.strftime("%H:%M")
         parts.append(
             f"Laddning {start_local}–{end_local} "
-            f"({s.power_kw:.0f} kW, {s.avg_price_sek_kwh:.2f} kr/kWh)"
+            f"({s.power_kw:.0f} kW, {s.avg_price_kwh:.2f} {currency}/kWh)"
         )
     if len(sessions) > 2:
         parts.append(f"+{len(sessions) - 2} till")
     return " / ".join(parts)
-    return dt.replace(minute=0, second=0, microsecond=0)

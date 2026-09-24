@@ -15,12 +15,13 @@
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set price thresholds and charging limits.",
+        "description": "Set price thresholds, charging limits and the currency of your price data.",
         "data": {
-          "threshold_start": "Start below this price (kr/kWh)",
-          "threshold_stop": "Stop above this price (kr/kWh)",
+          "threshold_start": "Start below this price (per kWh)",
+          "threshold_stop": "Stop above this price (per kWh)",
           "charger_max_kw": "Max charger power (kW)",
-          "battery_need_kwh": "Battery energy need (kWh, optional)"
+          "battery_need_kwh": "Battery energy need (kWh, optional)",
+          "currency": "Price currency"
         }
       }
     }
@@ -37,20 +38,21 @@
           "charger_stop_button_entity": "Stop charging button",
           "charger_mode_sensor_entity": "Charger mode sensor",
           "deadline_entity": "Deadline input_datetime (optional)",
-          "threshold_start": "Start below this price (kr/kWh)",
-          "threshold_stop": "Stop above this price (kr/kWh)",
+          "threshold_start": "Start below this price (per kWh)",
+          "threshold_stop": "Stop above this price (per kWh)",
           "charger_max_kw": "Max charger power (kW)",
           "battery_need_kwh": "Battery energy need (kWh, optional)"
         }
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set price thresholds and charging limits.",
+        "description": "Set price thresholds, charging limits and the currency of your price data.",
         "data": {
-          "threshold_start": "Start below this price (kr/kWh)",
-          "threshold_stop": "Stop above this price (kr/kWh)",
+          "threshold_start": "Start below this price (per kWh)",
+          "threshold_stop": "Stop above this price (per kWh)",
           "charger_max_kw": "Max charger power (kW)",
-          "battery_need_kwh": "Battery energy need (kWh, optional)"
+          "battery_need_kwh": "Battery energy need (kWh, optional)",
+          "currency": "Price currency"
         }
       }
     }

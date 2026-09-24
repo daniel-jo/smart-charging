@@ -8,8 +8,7 @@ __pycache__/
 venv/
 .pytest_cache/
 
-# --- Secrets -----------------------------------------------------------------
-# This integration has no API keys. Do NOT commit price fixture files with
-# real price data either — use .sample files for checked-in examples.
-.env
+# --- Local fixtures -----------------------------------------------------------
+# This integration has no API keys or secrets. Do NOT commit price fixture
+# files with real price data — use .sample files for checked-in examples.
 dryrun_prices.json

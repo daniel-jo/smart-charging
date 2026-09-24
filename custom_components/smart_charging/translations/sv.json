@@ -15,12 +15,13 @@
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in priströsklar och laddgränser.",
+        "description": "Ställ in priströsklar, laddgränser och valutan för dina prisdata.",
         "data": {
-          "threshold_start": "Starta laddning under detta pris (kr/kWh)",
-          "threshold_stop": "Stoppa laddning över detta pris (kr/kWh)",
+          "threshold_start": "Starta laddning under detta pris (per kWh)",
+          "threshold_stop": "Stoppa laddning över detta pris (per kWh)",
           "charger_max_kw": "Max laddareffekt (kW)",
-          "battery_need_kwh": "Energibehov (kWh, valfritt)"
+          "battery_need_kwh": "Energibehov (kWh, valfritt)",
+          "currency": "Prisvaluta"
         }
       }
     }
@@ -37,20 +38,21 @@
           "charger_stop_button_entity": "Knapp: stoppa laddning",
           "charger_mode_sensor_entity": "Laddarens läge-sensor",
           "deadline_entity": "Deadline input_datetime (valfritt)",
-          "threshold_start": "Starta laddning under (kr/kWh)",
-          "threshold_stop": "Stoppa laddning över (kr/kWh)",
+          "threshold_start": "Starta laddning under (per kWh)",
+          "threshold_stop": "Stoppa laddning över (per kWh)",
           "charger_max_kw": "Max laddareffekt (kW)",
           "battery_need_kwh": "Energibehov (kWh, valfritt)"
         }
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in priströsklar och laddgränser.",
+        "description": "Ställ in priströsklar, laddgränser och valutan för dina prisdata.",
         "data": {
-          "threshold_start": "Starta laddning under (kr/kWh)",
-          "threshold_stop": "Stoppa laddning över (kr/kWh)",
+          "threshold_start": "Starta laddning under (per kWh)",
+          "threshold_stop": "Stoppa laddning över (per kWh)",
           "charger_max_kw": "Max laddareffekt (kW)",
-          "battery_need_kwh": "Energibehov (kWh, valfritt)"
+          "battery_need_kwh": "Energibehov (kWh, valfritt)",
+          "currency": "Prisvaluta"
         }
       }
     }

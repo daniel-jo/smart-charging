@@ -35,7 +35,7 @@ def _session_attrs(sessions: list) -> list[dict]:
                 "start": _iso(s.start),
                 "end": _iso(s.end),
                 "power_kw": s.power_kw,
-                "avg_price_sek_kwh": s.avg_price_sek_kwh,
+                "avg_price_kwh": s.avg_price_kwh,
                 "hours": s.hours,
             }
         )
@@ -97,6 +97,7 @@ class SmartChargingPlanSensor(CoordinatorEntity, SensorEntity):
             "next_action": next_action,
             "mode": self.coordinator.mode,
             "battery_need_kwh": plan.battery_need_kwh,
+            "currency": plan.currency,
             "updated": _iso(plan.updated),
         }
 

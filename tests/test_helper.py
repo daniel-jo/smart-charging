@@ -276,7 +276,7 @@ def test_battery_need_selects_cheapest_blocks():
     )
     assert len(plan.sessions) == 1
     assert len(plan.sessions[0].hours) == 1
-    assert abs(plan.sessions[0].avg_price_sek_kwh - 0.40) < EPSILON
+    assert abs(plan.sessions[0].avg_price_kwh - 0.40) < EPSILON
 
 
 def test_battery_need_none_takes_all_cheap():
@@ -413,6 +413,90 @@ def test_summary_disconnected():
         now=_now(9),
     )
     assert plan.summary == "Ej inkopplad"
+
+
+def test_summary_shows_configured_currency():
+    plan = helper.compute_plan(
+        price_hours=_pts([(10, 0.70), (11, 0.90)]),
+        connected=True,
+        mode=helper._MODE_PLAN,
+        threshold_start=0.80,
+        threshold_stop=0.95,
+        deadline=None,
+        charger_max_kw=11.0,
+        battery_need_kwh=None,
+        now=_now(9),
+        currency="EUR",
+    )
+    assert plan.currency == "EUR"
+    assert "EUR/kWh" in plan.summary
+
+
+def test_plan_default_currency_is_eur():
+    plan = helper.compute_plan(
+        price_hours=_pts([(10, 0.70)]),
+        connected=True,
+        mode=helper._MODE_OFF,
+        threshold_start=0.80,
+        threshold_stop=0.95,
+        deadline=None,
+        charger_max_kw=11.0,
+        battery_need_kwh=None,
+        now=_now(9),
+    )
+    assert plan.currency == "EUR"
+
+
+# ---------------------------------------------------------------------------
+# Price parsing — currency handling
+# ---------------------------------------------------------------------------
+
+
+def test_parse_price_hours_uses_generic_key():
+    """Prices are read from the currency-agnostic 'currency_kwh' key."""
+    hours = [
+        {"start": "2026-09-17T10:00:00+00:00", "currency_kwh": 0.40, "sek_kwh": 9.99},
+        {"start": "2026-09-17T11:00:00+00:00", "currency_kwh": 0.50},
+    ]
+    out = helper.parse_price_hours(hours, currency="EUR")
+    assert [h.price_kwh for h in out] == [0.40, 0.50]
+    assert out[0].start == _now(10)
+
+
+def test_parse_price_hours_uses_chosen_currency_key():
+    """A per-currency key matching the configured choice is accepted.
+
+    This is the *only* place SEK is used in the tests: it verifies the
+    conversion of a SEK-keyed source when the user has explicitly chosen SEK.
+    """
+    hours = [{"start": "2026-09-17T10:00:00+00:00", "sek_kwh": 0.80}]
+    out = helper.parse_price_hours(hours, currency="SEK")
+    assert len(out) == 1
+    assert abs(out[0].price_kwh - 0.80) < EPSILON
+
+
+def test_parse_price_hours_no_implicit_currency_fallback():
+    """Prices in a currency the user did NOT choose are never trusted."""
+    hours = [{"start": "2026-09-17T10:00:00+00:00", "sek_kwh": 0.80}]
+    assert helper.parse_price_hours(hours, currency="EUR") == []
+
+
+def test_parse_price_hours_naive_start_assumed_utc():
+    hours = [{"start": "2026-09-17T10:00:00", "currency_kwh": 0.30}]
+    out = helper.parse_price_hours(hours, currency="EUR")
+    assert len(out) == 1
+    assert out[0].start == datetime(2026, 9, 17, 10, 0, tzinfo=UTC)
+
+
+def test_parse_price_hours_skips_bad_rows():
+    hours = [
+        {"start": "2026-09-17T10:00:00+00:00", "currency_kwh": 0.30},
+        {"start": "not-a-date", "currency_kwh": 0.40},
+        {"start": "2026-09-17T11:00:00+00:00"},  # no usable price key
+    ]
+    out = helper.parse_price_hours(hours, currency="EUR")
+    assert len(out) == 1
+    assert out[0].price_kwh == 0.30
 
 
 # ---------------------------------------------------------------------------

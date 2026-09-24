@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Standalone dry-run of the smart charging planner.
 
-Loads a price JSON file and prints the plan. Requires only the Python standard
-library (no Home Assistant dependencies).
+Loads a price JSON file (or falls back to a built-in sample) and prints the
+plan. Requires only the Python standard library (no Home Assistant
+dependencies).
 
 Usage:
+    python3 dryrun.py
     python3 dryrun.py --prices dryrun_prices.json
     python3 dryrun.py --prices dryrun_prices.json --mode live --threshold-start 0.50
     python3 dryrun.py --sample > dryrun_prices.json
@@ -32,7 +34,7 @@ def _generate_sample() -> str:
     hours = [
         {
             "start": (base + timedelta(hours=h)).isoformat(),
-            "sek_kwh": round(
+            "currency_kwh": round(
                 0.30
                 if 4 <= (h % 24) <= 6
                 else 0.70
@@ -51,16 +53,20 @@ def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def load_prices(path: str) -> list[helper.PriceHour]:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+def _prices_from_data(data: object, currency: str) -> list[helper.PriceHour]:
     if isinstance(data, dict):
         raw = data.get("hours", data)
     elif isinstance(data, list):
         raw = data
     else:
         raise ValueError("Unexpected JSON structure")
-    return [helper.PriceHour(_parse_iso(h["start"]), h["sek_kwh"]) for h in raw]
+    return helper.parse_price_hours(raw, currency=currency)
+
+
+def load_prices(path: str, currency: str) -> list[helper.PriceHour]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return _prices_from_data(data, currency)
 
 
 def _mode(mode_str: str) -> str:
@@ -79,7 +85,12 @@ def _mode(mode_str: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dry-run the smart charging planner")
-    parser.add_argument("--prices", type=str, default="", help="Path to price JSON file")
+    parser.add_argument(
+        "--prices",
+        type=str,
+        default="",
+        help="Path to price JSON file (default: built-in sample)",
+    )
     parser.add_argument(
         "--sample", action="store_true", help="Print a sample price JSON and exit"
     )
@@ -90,10 +101,16 @@ def main() -> int:
         help="Mode: off, plan (default), or live",
     )
     parser.add_argument(
-        "--threshold-start", type=float, default=0.80, help="Start threshold (kr/kWh)"
+        "--threshold-start", type=float, default=0.80, help="Start threshold (per kWh)"
     )
     parser.add_argument(
-        "--threshold-stop", type=float, default=0.95, help="Stop threshold (kr/kWh)"
+        "--threshold-stop", type=float, default=0.95, help="Stop threshold (per kWh)"
+    )
+    parser.add_argument(
+        "--currency",
+        type=str,
+        default="EUR",
+        help="Price currency code (default: EUR)",
     )
     parser.add_argument(
         "--deadline", type=str, default="", help="Deadline ISO datetime"
@@ -123,12 +140,12 @@ def main() -> int:
         print(_generate_sample())
         return 0
 
-    if not args.prices:
-        parser.print_help()
-        print("\nProvide --prices or --sample.")
-        return 1
-
-    prices = load_prices(args.prices)
+    if args.prices:
+        price_source = args.prices
+        prices = load_prices(args.prices, args.currency)
+    else:
+        price_source = "built-in sample"
+        prices = _prices_from_data(json.loads(_generate_sample()), args.currency)
     now = _parse_iso(args.now) if args.now else datetime.now(UTC)
     deadline = _parse_iso(args.deadline) if args.deadline else None
 
@@ -142,10 +159,12 @@ def main() -> int:
         charger_max_kw=args.charger_max_kw,
         battery_need_kwh=args.battery_need_kwh,
         now=now,
+        currency=args.currency,
     )
 
     print(f"Mode:           {args.mode}")
     print(f"Connected:      {'yes' if args.connected else 'no'}")
+    print(f"Currency:       {args.currency}")
     print(f"Thresholds:     start <= {args.threshold_start}  stop >= {args.threshold_stop}")
     print(f"Charger max:    {args.charger_max_kw} kW")
     if args.battery_need_kwh:
@@ -155,6 +174,7 @@ def main() -> int:
     if deadline:
         print(f"Deadline:       {deadline.isoformat()}")
     print(f"Now:            {now.isoformat()}")
+    print(f"Price source:   {price_source}")
     print(f"Price hours:    {len(prices)}")
     print()
     print(f"Summary:        {plan.summary}")
@@ -166,7 +186,7 @@ def main() -> int:
     for i, s in enumerate(plan.sessions, 1):
         print(
             f"  {i}. {s.start.isoformat()} -> {s.end.isoformat()}  "
-            f"{s.power_kw} kW  avg {s.avg_price_sek_kwh:.4f} kr/kWh  ({len(s.hours)} h)"
+            f"{s.power_kw} kW  avg {s.avg_price_kwh:.4f} {args.currency}/kWh  ({len(s.hours)} h)"
         )
     return 0
 

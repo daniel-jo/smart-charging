@@ -32,8 +32,8 @@ hacs.json                           HACS metadata
       (`sensor.spot_prices_<AREA>_forecast`), your charger's operation mode
       switch, resume/stop buttons, charger mode sensor, and an optional
       deadline `input_datetime`.
-   2. **Parameters** — set the price thresholds, charger max power and
-      optional battery energy need.
+   2. **Parameters** — set the price thresholds, charger max power, optional
+      battery energy need, and **choose the currency of your price data**.
 6. The integration starts in **Planläge (test)** mode — see below.
 
 Updates arrive as HACS update notifications whenever a new release is tagged
@@ -54,7 +54,7 @@ Tools.
 
 | Entity ID | Type | Purpose |
 |---|---|---|
-| `sensor.smart_charging_plan` | sensor | Human-readable summary + `planned_sessions` (list), `next_action`, `mode` |
+| `sensor.smart_charging_plan` | sensor | Human-readable summary + `planned_sessions` (list), `next_action`, `mode`, `currency` |
 | `sensor.smart_charging_decision` | sensor | `resume`/`stop`/`none` + `reason` attribute |
 | `select.smart_charging_mode` | select | Av / Planläge (test) / Live |
 | `calendar.smart_charging_plan` | calendar | Every planned session as a calendar event |
@@ -67,11 +67,21 @@ Tools.
     "start": "2026-09-23T22:00:00+02:00",
     "end": "2026-09-24T02:00:00+02:00",
     "power_kw": 11.0,
-    "avg_price_sek_kwh": 0.567,
-    "hours": [{"start": "2026-09-23T22:00:00+02:00", "sek_kwh": 0.50}, ...]
+    "avg_price_kwh": 0.567,
+    "hours": [{"start": "2026-09-23T22:00:00+02:00", "price_kwh": 0.50}, ...]
   }
 ]
 ```
+
+Prices are **never converted** — the values are taken as-is from your price
+sensor and labelled with the currency you choose during setup (`currency`
+attribute on `sensor.smart_charging_plan`). Prices in a currency you did *not*
+select are ignored.
+
+The integration reads hourly prices from the `currency_kwh` attribute of the
+configured spot-price sensor (`hours` list), falling back to the per-currency
+key matching your choice (e.g. `eur_kwh`, `sek_kwh`). There is **no** implicit
+SEK fallback.
 
 Use this in any chart card (e.g. ApexCharts) to overlay the planned charging
 windows on the price forecast graph.
@@ -81,8 +91,9 @@ windows on the price forecast graph.
 ```bash
 python3 -m pytest tests/ -v              # unit tests
 python3 tests/test_helper.py              # standalone (no pytest)
+python3 dryrun.py                        # dry-run with a built-in sample
 python3 dryrun.py --sample > prices.json  # sample price fixture
-python3 dryrun.py --prices prices.json    # dry-run the planner
+python3 dryrun.py --prices prices.json    # dry-run against price data
 ```
 
 ## Dashboard visualization (ApexCharts)

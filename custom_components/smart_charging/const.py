@@ -29,6 +29,14 @@ CONF_THRESHOLD_START = "threshold_start"
 CONF_THRESHOLD_STOP = "threshold_stop"
 CONF_CHARGER_MAX_KW = "charger_max_kw"
 CONF_BATTERY_NEED_KWH = "battery_need_kwh"
+CONF_CURRENCY = "currency"
+
+# --- currency ---------------------------------------------------------------
+# The price currency is a *required* user choice; EUR is only a safety-net
+# default (e.g. legacy config entries that predate the setting). Prices are
+# never converted — they are assumed to already be in the configured currency.
+CURRENCY_OPTIONS = ["EUR", "SEK", "NOK", "DKK", "GBP", "USD"]
+DEFAULT_CURRENCY = "EUR"
 
 # --- defaults ---------------------------------------------------------------
 DEFAULT_THRESHOLD_START = 0.80
@@ -39,6 +47,8 @@ DEFAULT_UPDATE_INTERVAL_MINUTES = 15
 DEFAULT_THROTTLE_SECONDS = 60
 
 # --- charger_mode sensor states that mean "connected" -----------------------
-# The zaptec sensor.*_charger_mode can be in these states:
-#   disconnected, connected_requesting, charging, finished, error, ...
-CHARGER_CONNECTED_STATES = {"connected_requesting", "charging"}
+# The zaptec sensor.*_charger_mode uses the native Zaptec values in lower
+# case (Zaptec integration >= 0.8):
+#   disconnected, connected_requesting, connected_charging,
+#   connected_finished, unknown, ...
+CHARGER_CONNECTED_STATES = {"connected_requesting", "connected_charging"}
