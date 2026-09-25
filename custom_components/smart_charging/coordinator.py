@@ -182,9 +182,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
                 lambda _: self.hass.async_create_task(self.async_request_refresh()),
             )
         )
-        self.async_set_update_interval(
-            timedelta(minutes=self._update_interval_minutes())
-        )
+        # Note: older HA core used async_set_update_interval() here, but that
+        # method no longer exists — update_interval is a settable property.
+        self.update_interval = timedelta(minutes=self._update_interval_minutes())
 
     def async_unload(self) -> None:
         """Remove listeners."""
