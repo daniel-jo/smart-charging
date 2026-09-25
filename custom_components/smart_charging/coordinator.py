@@ -121,7 +121,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
-        self._listeners: list[CALLBACK_TYPE] = []
+        # NB: this must NOT be called `_listeners` — DataUpdateCoordinator
+        # already uses that name as a dict for CoordinatorEntity subscriptions.
+        self._listener_unsubs: list[CALLBACK_TYPE] = []
         self._last_action_signature: Optional[str] = None
         self._last_summary: Optional[str] = None
         self._mode: str = str(entry.data.get("mode", MODE_PLAN))
@@ -148,6 +150,11 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         return self._mode
 
     @property
+    def entry(self) -> ConfigEntry:
+        """The config entry this coordinator is bound to."""
+        return self._entry
+
+    @property
     def now(self) -> datetime:
         return dt_util.utcnow()
 
@@ -162,14 +169,14 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         """Subscribe to entity changes and the periodic tick."""
         for entity_id in self._entity_ids():
             if entity_id:
-                self._listeners.append(
+                self._listener_unsubs.append(
                     ha_event.async_track_state_change_event(
                         self.hass,
                         [entity_id],
                         self._on_entity_change,
                     )
                 )
-        self._listeners.append(
+        self._listener_unsubs.append(
             self.hass.bus.async_listen_once(
                 EVENT_HOMEASSISTANT_START,
                 lambda _: self.hass.async_create_task(self.async_request_refresh()),
@@ -184,9 +191,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         if self._deadline_timer is not None:
             self._deadline_timer()
             self._deadline_timer = None
-        for listener in self._listeners:
+        for listener in self._listener_unsubs:
             listener()
-        self._listeners = []
+        self._listener_unsubs = []
 
     @callback
     def _on_entity_change(self, _event: Any) -> None:
