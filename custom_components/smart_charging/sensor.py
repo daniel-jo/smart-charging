@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
+from . import helper
 from .const import DOMAIN, NAME, VERSION
 from .coordinator import SmartChargingCoordinator
 
@@ -95,6 +96,7 @@ class SmartChargingPlanSensor(CoordinatorEntity, SensorEntity):
             }
         return {
             "planned_sessions": _session_attrs(plan.sessions),
+            "planned_hours": helper.planned_hours(plan.sessions),
             "next_action": next_action,
             "mode": self.coordinator.mode,
             "currency": plan.currency,

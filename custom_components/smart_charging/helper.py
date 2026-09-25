@@ -321,7 +321,10 @@ def compute_plan(
         plan.next_action = NextAction(action="none", reason="off")
         return plan
 
-    if not connected:
+    # A plan is pure information — only Live mode is allowed to write to the
+    # charger, so every other mode may preview the plan even when the car is
+    # not connected. Live keeps the guard so it never acts on a detached car.
+    if not connected and mode == _MODE_LIVE:
         plan = _plan()
         plan.summary = "Ej inkopplad"
         plan.next_action = NextAction(action="stop", reason="disconnected")
@@ -590,6 +593,30 @@ def compute_plan(
             plan.next_action = NextAction(action="stop", at=now_hour, reason="gap")
 
     return plan
+
+
+def planned_hours(sessions: list[ChargingSession]) -> list[dict]:
+    """Flatten planned sessions into per-hour chart points.
+
+    One entry per selected hour, compact: ``{"s": <unix epoch seconds>,
+    "p": <price/kWh>, "kw": <charging power kW>, "b": <1 if boost else 0>}``.
+    Uses the same ``{"s", "p"}`` shape as the spot-price forecast sensor so
+    any chart card (ApexCharts, a custom card, ...) can plot the plan over
+    time — including future hours — straight from the sensor attributes.
+    """
+    out: list[dict] = []
+    for sess in sessions:
+        for hour in sess.hours:
+            start = hour.get("start")
+            out.append(
+                {
+                    "s": int(start.timestamp()) if start is not None else 0,
+                    "p": hour.get("price_kwh", 0.0),
+                    "kw": sess.power_kw,
+                    "b": 1 if sess.is_boost else 0,
+                }
+            )
+    return sorted(out, key=lambda pt: pt["s"])
 
 
 # ---------------------------------------------------------------------------

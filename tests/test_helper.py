@@ -93,12 +93,30 @@ def test_off_mode_returns_empty_plan():
     assert plan.summary == "Av"
 
 
-def test_disconnected_returns_empty():
-    plan = _cp(connected=False)
+def test_disconnected_live_returns_empty():
+    """Live must never build a plan for a detached car — guarded."""
+    plan = _cp(connected=False, mode=helper._MODE_LIVE)
     assert plan.sessions == []
     assert plan.next_action.action == "stop"
     assert plan.next_action.reason == "disconnected"
     assert plan.summary == "Ej inkopplad"
+
+
+def test_disconnected_plan_mode_still_plans():
+    """Planläge (test) previews the plan even without a connection.
+
+    The plan is information only; nothing is ever written to the charger in
+    Plan mode, so a detached car must not block the preview.
+    """
+    plan = _cp(
+        price_hours=_day_night_prices(days=2),
+        connected=False,
+        mode=helper._MODE_PLAN,
+        now=_now(0),
+    )
+    assert plan.sessions
+    assert plan.summary != "Ej inkopplad"
+    assert all(h["price_kwh"] == 0.8 for s in plan.sessions for h in s.hours)
 
 
 def test_no_price_data_returns_no_data():
@@ -297,6 +315,19 @@ def test_cheap_top_up_reaches_target_and_stops():
     # Now is inside the first session hour -> keep charging.
     assert plan.next_action.action == "none"
     assert plan.next_action.reason == "charging"
+
+
+def test_planned_hours_flat_compact_sorted():
+    """planned_hours flattens sessions into compact per-hour chart points."""
+    plan = _cp(price_hours=_day_night_prices(days=2))
+    hrs = helper.planned_hours(plan.sessions)
+    assert len(hrs) == sum(len(s.hours) for s in plan.sessions)
+    assert hrs == sorted(hrs, key=lambda pt: pt["s"])
+    assert set(hrs[0]) == {"s", "p", "kw", "b"}
+    assert hrs[0]["s"] == int(BASE.timestamp())
+    assert hrs[0]["p"] == 0.8
+    assert hrs[0]["kw"] == 11.0
+    assert hrs[0]["b"] == 0
 
 
 def test_no_charging_when_battery_at_target():

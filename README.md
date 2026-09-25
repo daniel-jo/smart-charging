@@ -102,8 +102,12 @@ hacs.json                           HACS metadata
 | Mode | State | Plan calc | Zaptec calls | Use case |
 |---|---|---|---|---|
 | **Av** | `sensor.smart_charging_plan` = `"Av"` | No | Never | Manual/off |
-| **Planläge (test)** | Plan + logbook | Yes | **No** | Verify decisions risk-free |
+| **Planläge (test)** | Plan + logbook | Yes | **No** | Verify decisions risk-free; a plan is also built while the car is disconnected |
 | **Live** | Plan + logbook | Yes | Yes | Enable charging |
+
+The plan is always only *information* — it never touches the charger by
+itself. Only **Live** writes to the charger (operation-mode switch +
+resume/stop buttons), and only for a car that reports as connected.
 
 Switch modes via `select.smart_charging_mode` or the HA Services → Developer
 Tools.
@@ -123,6 +127,8 @@ Tools.
 {
   "planned_sessions": [{"start": "...", "end": "...", "power_kw": 11.0,
                           "avg_price_kwh": 0.567, "is_boost": false, "hours": [...]}],
+  "planned_hours": [{"s": 1789603200, "p": 0.56, "kw": 11.0, "b": 0},
+                    {"s": 1789606800, "p": 0.61, "kw": 11.0, "b": 0}],
   "next_action": {"action": "resume", "at": "...", "reason": "cheap_window"},
   "mode": "plan",
   "currency": "SEK",
@@ -142,6 +148,11 @@ Tools.
   "updated": "..."
 }
 ```
+
+`planned_hours` is a flat per-hour list of the hours the plan intends to
+charge — one entry per hour with the same compact `{"s": epoch, "p": price}`
+shape as the spot-price forecast sensor, plus `kw` (charging power) and `b`
+(`1` for the weekly boost). It makes the *future* plan trivial to chart.
 
 `threshold_start`/`threshold_stop` are **derived** from the hours actually
 selected — they are information, never input.
@@ -194,6 +205,34 @@ series:
     name: Plan
     color: "#43A047"
 ```
+
+The same idea with the flat `planned_hours` attribute — the price of every
+planned future charging hour as bars (boost hours purple):
+
+```yaml
+type: custom:apexcharts-card
+graph_span: 5d
+now:
+  show: true
+header:
+  show: true
+  title: Planerade laddtimmar
+series:
+  - entity: sensor.smart_charging_plan
+    attribute: planned_hours
+    type: column
+    data_generator: |
+      return entity.attributes.planned_hours.map(h => ({
+        x: new Date(h.s * 1000).getTime(),
+        y: h.p,
+        color: h.b ? "#E040FB" : "#43A047"
+      }));
+    name: Plan
+```
+
+> Cards read the sensor's *current* attributes, so they show future hours too —
+> Home Assistant's built-in history charts only show past states. Set
+> `graph_span` long enough to cover today plus the planned horizon.
 
 ## Development & testing
 

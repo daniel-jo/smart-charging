@@ -275,8 +275,16 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return SmartChargingOptionsFlow(config_entry)
 
 
-class SmartChargingOptionsFlow(config_entries.OptionsFlow):
-    """Options flow — edit entities and parameters of an existing entry."""
+class SmartChargingOptionsFlow(config_entries.OptionsFlowWithReload):
+    """Options flow — edit entities and parameters of an existing entry.
+
+    ``OptionsFlowWithReload`` reloads the integration the moment the flow is
+    saved, so option changes take effect immediately instead of at the next
+    15-minute refresh. It must not be combined with config-entry update
+    listeners — this integration registers none.
+    """
+
+    automatic_reload = True
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
@@ -291,7 +299,8 @@ class SmartChargingOptionsFlow(config_entries.OptionsFlow):
         self, user_input: Optional[dict[str, Any]] = None
     ) -> FlowResult:
         errors: dict[str, str] = {}
-        entry_data = dict(self._config_entry.data)
+        # Prefill from the *effective* config (options override data).
+        entry_data = {**self._config_entry.data, **self._config_entry.options}
         if user_input is not None:
             self._entity_data = dict(user_input)
             self._entity_data.update(
@@ -343,7 +352,11 @@ class SmartChargingOptionsFlow(config_entries.OptionsFlow):
         self, user_input: Optional[dict[str, Any]] = None
     ) -> FlowResult:
         errors: dict[str, str] = {}
-        entity_data = getattr(self, "_entity_data", dict(self._config_entry.data))
+        entity_data = getattr(
+            self,
+            "_entity_data",
+            {**self._config_entry.data, **self._config_entry.options},
+        )
         if user_input is not None:
             data = dict(self._config_entry.data)
             data.update(entity_data)
