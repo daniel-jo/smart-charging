@@ -10,7 +10,8 @@
           "charger_operation_mode_entity": "Charger operation mode switch",
           "charger_resume_button_entity": "Resume charging button",
           "charger_stop_button_entity": "Stop charging button",
-          "charger_mode_sensor_entity": "Charger mode sensor"
+          "charger_mode_sensor_entity": "Charger mode sensor",
+          "charger_energy_sensor_entity": "Charging energy sensor (kWh, optional - for live statistics)"
         }
       },
       "params": {
@@ -42,7 +43,8 @@
           "charger_operation_mode_entity": "Charger operation mode switch",
           "charger_resume_button_entity": "Resume charging button",
           "charger_stop_button_entity": "Stop charging button",
-          "charger_mode_sensor_entity": "Charger mode sensor"
+          "charger_mode_sensor_entity": "Charger mode sensor",
+          "charger_energy_sensor_entity": "Charging energy sensor (kWh, optional - for live statistics)"
         }
       },
       "params": {

@@ -620,6 +620,266 @@ def planned_hours(sessions: list[ChargingSession]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Charging statistics — energy, cost and savings (no HA imports)
+#
+# These are pure accumulators used by the coordinator for both the simulated
+# Plan-mode ledger and the measured Live-mode ledger. The coordinator decides
+# *when* to accrue (which planned hours passed / how much the energy sensor
+# measured); this module only does the math.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ChargingStats:
+    """Accumulated charging statistics for one mode (plan / live).
+
+    ``cost`` is what was paid (or would have been paid): the sum of
+    ``price_kwh * kwh`` over every accrued charging hour. ``cost_at_ref`` is
+    what the same energy would have cost at the *reference* price (the
+    day's average) — the difference is ``saved``. ``sessions`` counts separate
+    charging windows (plan-mode test runs / live charging sessions), not
+    individual accrual events.
+    """
+
+    kwh: float = 0.0
+    cost: float = 0.0
+    cost_at_ref: float = 0.0
+    sessions: int = 0
+    first_at: Optional[datetime] = None
+    last_at: Optional[datetime] = None
+
+    @property
+    def avg_price_kwh(self) -> Optional[float]:
+        """Energy-weighted average price paid (currency per kWh)."""
+        if self.kwh <= 1e-9:
+            return None
+        return self.cost / self.kwh
+
+    @property
+    def saved(self) -> Optional[float]:
+        """Money saved versus the reference price (negative = lost)."""
+        if self.kwh <= 1e-9:
+            return None
+        return self.cost_at_ref - self.cost
+
+
+def accrue_charging(
+    stats: ChargingStats,
+    kwh: float,
+    price_kwh: float,
+    ref_price_kwh: float,
+    at: Optional[datetime] = None,
+) -> ChargingStats:
+    """Return a new ``ChargingStats`` with ``kwh`` accrued at the given prices.
+
+    ``price_kwh`` is what was (or would have been) paid per kWh,
+    ``ref_price_kwh`` the reference the savings are measured against. Negative
+    ``kwh`` is ignored — energy is never un-accrued. ``at`` marks the accrual
+    timestamp (first/last are kept for display).
+    """
+    if kwh <= 0:
+        return stats
+    return ChargingStats(
+        kwh=stats.kwh + kwh,
+        cost=stats.cost + kwh * price_kwh,
+        cost_at_ref=stats.cost_at_ref + kwh * ref_price_kwh,
+        sessions=stats.sessions,
+        first_at=stats.first_at if stats.first_at is not None else at,
+        last_at=at,
+    )
+
+
+def start_stat_session(stats: ChargingStats) -> ChargingStats:
+    """Mark a new charging window (increments the session counter)."""
+    return ChargingStats(
+        kwh=stats.kwh,
+        cost=stats.cost,
+        cost_at_ref=stats.cost_at_ref,
+        sessions=stats.sessions + 1,
+        first_at=stats.first_at,
+        last_at=stats.last_at,
+    )
+
+
+def reference_price_kwh(
+    day_prices: list[DayPrice],
+    at: datetime,
+    fallback: Optional[float] = None,
+    local_tz: Optional[tzinfo] = None,
+) -> Optional[float]:
+    """Day-average reference price for ``at`` (best-effort).
+
+    Looks the forecast sensor's ``days`` attribute up by date; ``local_tz``
+    (the HA timezone) determines which date an instantaneous ``at`` belongs to.
+    Falls back to ``fallback`` (e.g. the mean of all forecast prices) when the
+    day is missing.
+    """
+    local = at.astimezone(local_tz) if local_tz is not None else at
+    day_str = local.strftime("%Y-%m-%d")
+    for day in day_prices:
+        if day.date == day_str and day.avg_kwh is not None:
+            return day.avg_kwh
+    return fallback
+
+
+def price_at(price_hours: list[PriceHour], at: datetime) -> Optional[float]:
+    """Price per kWh of the forecast hour containing ``at``.
+
+    The price sensor's hours sit on the hour, so the returned price applies to
+    the whole clock hour. Returns ``None`` when the hour is outside the
+    forecast (e.g. after a long outage).
+    """
+    hour_start = floor_hour(at)
+    for hour in price_hours:
+        if hour.start == hour_start:
+            return hour.price_kwh
+    return None
+
+
+def hour_key(dt: datetime) -> str:
+    """Stable UTC string key identifying an hourly charging slot."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:00")
+
+
+def _parse_optional_dt(value: Any) -> Optional[datetime]:
+    """Best-effort parse of an ISO timestamp to an aware datetime."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def accrue_plan_hours(
+    stats: ChargingStats,
+    sessions: list[ChargingSession],
+    now: datetime,
+    day_prices: list[DayPrice],
+    fallback_ref: Optional[float],
+    accrued_hours: set,
+    partial_hours: dict,
+    local_tz: Optional[tzinfo] = None,
+) -> ChargingStats:
+    """Accrue the plan's elapsed hours into ``stats`` (Plan-mode simulation).
+
+    Fully-past planned hours are accrued whole (``power_kw * duration``);
+    the currently ongoing hour is accrued minute-precise through
+    ``partial_hours`` (``{"until": <ISO>, "price": ..., "power": ...}`` per
+    hourly key) so the simulated total grows in real time. Hour keys in
+    ``accrued_hours`` are never accrued twice, which keeps the totals stable
+    across recomputes and restarts.
+
+    ``accrued_hours`` and ``partial_hours`` are updated in place; a new
+    ``ChargingStats`` is returned (or the same instance when nothing accrued).
+    """
+    ongoing_keys = set()
+    for sess in sessions:
+        power = sess.power_kw or 0.0
+        for hour in sess.hours:
+            start: datetime = hour["start"]
+            duration = float(hour.get("duration_hours", 1.0))
+            end = start + timedelta(hours=duration)
+            key = hour_key(start)
+            price = float(hour["price_kwh"])
+            if end <= now:
+                # Fully-past hour.
+                if key in accrued_hours:
+                    continue
+                partial = partial_hours.pop(key, None)
+                if partial is not None:
+                    # Close the minute-precise track: accrue the remainder.
+                    until = _parse_optional_dt(partial.get("until"))
+                    price = float(partial.get("price", price))
+                    power = float(partial.get("power", power))
+                    if until is not None and until < end:
+                        kwh = power * ((end - until).total_seconds() / 3600.0)
+                        if kwh > 1e-9:
+                            ref = reference_price_kwh(
+                                day_prices, until, fallback_ref, local_tz
+                            )
+                            stats = accrue_charging(stats, kwh, price, ref or 0.0, at=until)
+                else:
+                    kwh = power * duration
+                    if kwh > 1e-9:
+                        ref = reference_price_kwh(
+                            day_prices, start, fallback_ref, local_tz
+                        )
+                        stats = accrue_charging(stats, kwh, price, ref or 0.0, at=start)
+                accrued_hours.add(key)
+            elif start <= now < end:
+                # Ongoing hour: accrue minute-precise up to now.
+                ongoing_keys.add(key)
+                partial = partial_hours.get(key)
+                accrue_from = start
+                if partial is not None:
+                    parsed = _parse_optional_dt(partial.get("until"))
+                    if parsed is not None and parsed > accrue_from:
+                        accrue_from = parsed
+                    price = float(partial.get("price", price))
+                    power = float(partial.get("power", power))
+                if now > accrue_from:
+                    kwh = power * ((now - accrue_from).total_seconds() / 3600.0)
+                    if kwh > 1e-9:
+                        ref = reference_price_kwh(
+                            day_prices, accrue_from, fallback_ref, local_tz
+                        )
+                        stats = accrue_charging(stats, kwh, price, ref or 0.0, at=accrue_from)
+                partial_hours[key] = {
+                    "until": now.isoformat(),
+                    "price": price,
+                    "power": power,
+                }
+
+    # Hours that vanished from the plan mid-window: stop at the last accrued
+    # point (the simulation reports what the plan intended at the time).
+    for key in [k for k in partial_hours if k not in ongoing_keys]:
+        partial_hours.pop(key, None)
+    return stats
+
+
+def stats_to_dict(stats: ChargingStats) -> dict:
+    """Serialise a ``ChargingStats`` for the HA storage helper."""
+    return {
+        "kwh": stats.kwh,
+        "cost": stats.cost,
+        "cost_at_ref": stats.cost_at_ref,
+        "sessions": stats.sessions,
+        "first_at": stats.first_at.isoformat() if stats.first_at else None,
+        "last_at": stats.last_at.isoformat() if stats.last_at else None,
+    }
+
+
+def stats_from_dict(data: Optional[dict]) -> ChargingStats:
+    """Rebuild a ``ChargingStats`` from ``stats_to_dict`` output (or ``None``)."""
+    if not isinstance(data, dict):
+        return ChargingStats()
+
+    def _ts(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    return ChargingStats(
+        kwh=float(data.get("kwh") or 0.0),
+        cost=float(data.get("cost") or 0.0),
+        cost_at_ref=float(data.get("cost_at_ref") or 0.0),
+        sessions=int(data.get("sessions") or 0),
+        first_at=_ts(data.get("first_at")),
+        last_at=_ts(data.get("last_at")),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 

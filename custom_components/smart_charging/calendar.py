@@ -43,7 +43,7 @@ class SmartChargingPlanCalendar(CoordinatorEntity, CalendarEntity):
     """Calendar entity showing planned charging sessions."""
 
     _attr_has_entity_name = True
-    _attr_name = "Charge plan"
+    _attr_name = "Plan"
     _attr_icon = "mdi:car-electric"
 
     def __init__(self, coordinator: SmartChargingCoordinator) -> None:

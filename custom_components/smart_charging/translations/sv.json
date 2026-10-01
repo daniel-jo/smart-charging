@@ -10,7 +10,8 @@
           "charger_operation_mode_entity": "Laddarens driftläge (strömbrytare)",
           "charger_resume_button_entity": "Knapp: återuppta laddning",
           "charger_stop_button_entity": "Knapp: stoppa laddning",
-          "charger_mode_sensor_entity": "Laddarens läge-sensor"
+          "charger_mode_sensor_entity": "Laddarens läge-sensor",
+          "charger_energy_sensor_entity": "Laddenergi-sensor (kWh, valfritt) - för live-statistik"
         }
       },
       "params": {
@@ -42,7 +43,8 @@
           "charger_operation_mode_entity": "Laddarens driftläge (strömbrytare)",
           "charger_resume_button_entity": "Knapp: återuppta laddning",
           "charger_stop_button_entity": "Knapp: stoppa laddning",
-          "charger_mode_sensor_entity": "Laddarens läge-sensor"
+          "charger_mode_sensor_entity": "Laddarens läge-sensor",
+          "charger_energy_sensor_entity": "Laddenergi-sensor (kWh, valfritt) - för live-statistik"
         }
       },
       "params": {

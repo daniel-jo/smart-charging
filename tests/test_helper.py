@@ -492,6 +492,205 @@ def test_summary_boost_marker():
 
 
 # ---------------------------------------------------------------------------
+# Charging statistics (accumulators, plan-hour accrual)
+# ---------------------------------------------------------------------------
+
+
+def _stat_session(
+    offsets: list[int],
+    prices: list[float] | None = None,
+    durations: list[float] | None = None,
+    power: float = 11.0,
+) -> helper.ChargingSession:
+    """Build a ChargingSession with one hour per offset (relative to BASE)."""
+    prices = prices or [0.8] * len(offsets)
+    durations = durations or [1.0] * len(offsets)
+    starts = [BASE + timedelta(hours=h) for h in offsets]
+    hours = [
+        {"start": starts[i], "price_kwh": prices[i], "duration_hours": durations[i]}
+        for i in range(len(starts))
+    ]
+    return helper.ChargingSession(
+        start=starts[0],
+        end=starts[-1] + timedelta(hours=durations[-1]),
+        power_kw=power,
+        avg_price_kwh=round(sum(prices) / len(prices), 4),
+        hours=hours,
+    )
+
+
+def test_stats_accrue_charging_and_derived_values():
+    stats = helper.accrue_charging(helper.ChargingStats(), 11.0, 0.8, 1.0, at=BASE)
+    assert stats.kwh == 11.0
+    assert stats.cost == 8.8
+    assert stats.cost_at_ref == 11.0
+    assert stats.sessions == 0  # windows are bumped separately
+    assert stats.first_at == BASE
+    assert stats.last_at == BASE
+    assert abs(stats.avg_price_kwh - 0.8) < EPSILON
+    assert abs(stats.saved - 2.2) < EPSILON
+
+    stats2 = helper.accrue_charging(stats, 11.0, 0.4, 1.0, at=BASE + timedelta(hours=1))
+    assert stats2.kwh == 22.0
+    assert abs(stats2.avg_price_kwh - 0.6) < EPSILON
+    assert stats2.first_at == BASE  # first accrual is sticky
+    assert stats2.last_at == BASE + timedelta(hours=1)
+
+
+def test_stats_accrue_ignores_non_positive_energy():
+    stats = helper.accrue_charging(helper.ChargingStats(), 5.0, 0.8, 1.0)
+    unchanged = helper.accrue_charging(stats, 0.0, 0.8, 1.0)
+    assert unchanged is stats
+    assert helper.accrue_charging(stats, -2.0, 0.8, 1.0) is stats
+
+
+def test_stats_empty_derived_values_are_none():
+    empty = helper.ChargingStats()
+    assert empty.avg_price_kwh is None
+    assert empty.saved is None
+
+
+def test_start_stat_session_bumps_counter_without_energy():
+    stats = helper.start_stat_session(helper.ChargingStats())
+    assert stats.sessions == 1 and stats.kwh == 0.0
+    stats = helper.accrue_charging(stats, 11.0, 0.8, 1.0)
+    stats = helper.start_stat_session(stats)
+    assert stats.sessions == 2 and stats.kwh == 11.0
+
+
+def test_reference_price_kwh_day_lookup_and_fallback():
+    days = [helper.DayPrice("2026-09-17", 0.5, 1.3, 0.9)]
+    # Matching day -> day average.
+    assert helper.reference_price_kwh(days, BASE) == 0.9
+    # Unknown day -> fallback.
+    assert helper.reference_price_kwh(days, BASE + timedelta(days=1), fallback=1.1) == 1.1
+    # No days at all -> fallback.
+    assert helper.reference_price_kwh([], BASE, fallback=0.7) == 0.7
+
+
+def test_price_at_hour_lookup():
+    prices = _pts([(0, 0.8), (1, 0.4), (2, 0.6)])
+    assert helper.price_at(prices, BASE + timedelta(minutes=30)) == 0.8
+    assert helper.price_at(prices, BASE + timedelta(hours=1, minutes=59)) == 0.4
+    assert helper.price_at(prices, BASE + timedelta(days=2)) is None
+
+
+def test_hour_key_is_utc_floor():
+    assert helper.hour_key(BASE) == "2026-09-17T00:00"
+    assert helper.hour_key(BASE + timedelta(hours=3, minutes=45)) == "2026-09-17T03:00"
+
+
+def test_stats_serialization_roundtrip():
+    stats = helper.start_stat_session(
+        helper.accrue_charging(helper.ChargingStats(), 22.0, 0.6, 1.0, at=BASE)
+    )
+    restored = helper.stats_from_dict(helper.stats_to_dict(stats))
+    assert restored.kwh == stats.kwh
+    assert restored.cost == stats.cost
+    assert restored.cost_at_ref == stats.cost_at_ref
+    assert restored.sessions == stats.sessions
+    assert restored.first_at == stats.first_at
+    assert restored.last_at == stats.last_at
+    # Tolerant of missing / malformed payloads.
+    assert helper.stats_from_dict(None).kwh == 0.0
+    assert helper.stats_from_dict({}).kwh == 0.0
+
+
+def test_accrue_plan_hours_fully_past_once_and_idempotent():
+    stats = helper.ChargingStats()
+    accrued = set()
+    partial = {}
+    sessions = [
+        _stat_session([0, 1], prices=[0.8, 0.4]),
+    ]
+    stats = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=2), [], None, accrued, partial
+    )
+    assert abs(stats.kwh - 22.0) < EPSILON
+    assert abs(stats.cost - (11.0 * 0.8 + 11.0 * 0.4)) < EPSILON
+    assert accrued == {helper.hour_key(BASE), helper.hour_key(BASE + timedelta(hours=1))}
+    assert partial == {}
+
+    # A later recompute must not double-count.
+    again = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=2), [], None, accrued, partial
+    )
+    assert again.kwh == stats.kwh
+    assert again.cost == stats.cost
+
+
+def test_accrue_plan_hours_ongoing_minute_precise():
+    stats = helper.ChargingStats()
+    accrued = set()
+    partial = {}
+    sessions = [_stat_session([5])]
+
+    stats = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=5, minutes=30), [], None, accrued, partial
+    )
+    assert abs(stats.kwh - 5.5) < EPSILON  # 11 kW * 0.5 h
+    assert helper.hour_key(BASE + timedelta(hours=5)) in partial
+
+    stats = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=5, minutes=45), [], None, accrued, partial
+    )
+    assert abs(stats.kwh - 8.25) < EPSILON  # 11 kW * 0.75 h
+
+    # The hour passes: the remainder is closed and the key archived.
+    stats = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=6, minutes=5), [], None, accrued, partial
+    )
+    assert abs(stats.kwh - 11.0) < EPSILON
+    assert partial == {}
+    assert helper.hour_key(BASE + timedelta(hours=5)) in accrued
+
+
+def test_accrue_plan_hours_deadline_cut_hour():
+    """A deadline-cut hour (duration < 1) accrues only the cut portion."""
+    stats = helper.ChargingStats()
+    accrued = set()
+    partial = {}
+    sessions = [_stat_session([8], durations=[0.25])]
+    stats = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=8, minutes=20), [], None, accrued, partial
+    )
+    assert abs(stats.kwh - 2.75) < EPSILON  # 11 kW * 0.25 h
+    assert helper.hour_key(BASE + timedelta(hours=8)) in accrued
+
+
+def test_accrue_plan_hours_dropped_partial_is_closed():
+    """An ongoing hour that vanishes from the plan stops accruing — nothing more."""
+    stats = helper.ChargingStats()
+    accrued = set()
+    partial = {}
+    sessions = [_stat_session([10])]
+    stats = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=10, minutes=30), [], None, accrued, partial
+    )
+    assert len(partial) == 1
+    assert abs(stats.kwh - 5.5) < EPSILON
+
+    stats = helper.accrue_plan_hours(
+        stats, [], BASE + timedelta(hours=10, minutes=40), [], None, accrued, partial
+    )
+    assert partial == {}
+    assert abs(stats.kwh - 5.5) < EPSILON
+
+
+def test_accrue_plan_hours_uses_day_reference_price():
+    stats = helper.ChargingStats()
+    accrued = set()
+    partial = {}
+    days = [helper.DayPrice("2026-09-17", 0.5, 1.3, 1.0)]
+    sessions = [_stat_session([3], prices=[0.8])]
+    stats = helper.accrue_plan_hours(
+        stats, sessions, BASE + timedelta(hours=4), days, None, accrued, partial
+    )
+    assert abs(stats.cost_at_ref - 11.0) < EPSILON
+    assert abs(stats.saved - 2.2) < EPSILON
+
+
+# ---------------------------------------------------------------------------
 # Run standalone
 # ---------------------------------------------------------------------------
 

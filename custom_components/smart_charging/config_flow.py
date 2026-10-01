@@ -25,6 +25,7 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_CHARGER_ENERGY_SENSOR,
     CONF_CHARGER_MAX_KW,
     CONF_CHARGER_MODE_SENSOR,
     CONF_CHARGER_OPERATION_MODE,
@@ -52,6 +53,12 @@ from .const import (
     DEFAULT_WEEKLY_FULL_CHARGE,
     DOMAIN,
     MODE_PLAN,
+)
+
+# OptionsFlowWithReload only exists on Home Assistant >= 2025.9; fall back to
+# the plain OptionsFlow on older core so the integration always imports.
+_OptionsFlowBase = getattr(
+    config_entries, "OptionsFlowWithReload", config_entries.OptionsFlow
 )
 
 CONF_MODE = "mode"
@@ -129,6 +136,10 @@ def _entities_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_CHARGER_MODE_SENSOR,
                 default=_entity_option(current.get(CONF_CHARGER_MODE_SENSOR, "")),
+            ): selector.selector({"entity": {"domain": "sensor"}}),
+            vol.Optional(
+                CONF_CHARGER_ENERGY_SENSOR,
+                default=_entity_option(current.get(CONF_CHARGER_ENERGY_SENSOR, "")),
             ): selector.selector({"entity": {"domain": "sensor"}}),
         }
     )
@@ -275,13 +286,13 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return SmartChargingOptionsFlow(config_entry)
 
 
-class SmartChargingOptionsFlow(config_entries.OptionsFlowWithReload):
+class SmartChargingOptionsFlow(_OptionsFlowBase):
     """Options flow — edit entities and parameters of an existing entry.
 
-    ``OptionsFlowWithReload`` reloads the integration the moment the flow is
-    saved, so option changes take effect immediately instead of at the next
-    15-minute refresh. It must not be combined with config-entry update
-    listeners — this integration registers none.
+    ``_OptionsFlowBase`` is ``OptionsFlowWithReload`` on HA >= 2025.9 (saves
+    reload the integration immediately) and the plain ``OptionsFlow`` on older
+    core (changes take effect at the next refresh). It must not be combined
+    with config-entry update listeners — this integration registers none.
     """
 
     automatic_reload = True
@@ -342,6 +353,7 @@ class SmartChargingOptionsFlow(config_entries.OptionsFlowWithReload):
                 CONF_CHARGER_RESUME_BUTTON,
                 CONF_CHARGER_STOP_BUTTON,
                 CONF_CHARGER_MODE_SENSOR,
+                CONF_CHARGER_ENERGY_SENSOR,
             )
         }
         return self.async_show_form(

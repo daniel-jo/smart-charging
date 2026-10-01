@@ -120,6 +120,12 @@ Tools.
 | `sensor.smart_charging_decision` | sensor | `resume`/`stop`/`none` + `reason` |
 | `select.smart_charging_mode` | select | Av / Planläge (test) / Live |
 | `calendar.smart_charging_plan` | calendar | Every planned session as a calendar event |
+| `sensor.smart_charging_plan_energy` | sensor | kWh "charged" in Plan mode (**simulated**) |
+| `sensor.smart_charging_plan_saving` | sensor | Money saved vs the day average (simulated) |
+| `sensor.smart_charging_plan_avg_price` | sensor | Average price paid per kWh (simulated) |
+| `sensor.smart_charging_live_energy` | sensor | kWh actually charged in Live mode |
+| `sensor.smart_charging_live_saving` | sensor | Money saved vs the day average (Live) |
+| `sensor.smart_charging_live_avg_price` | sensor | Average price paid per kWh (Live) |
 
 ### `sensor.smart_charging_plan` attributes
 
@@ -156,6 +162,67 @@ shape as the spot-price forecast sensor, plus `kw` (charging power) and `b`
 
 `threshold_start`/`threshold_stop` are **derived** from the hours actually
 selected — they are information, never input.
+
+## Charging statistics — how much you charge, save and at what price
+
+Three numbers are tracked **separately per mode** (`sensor.smart_charging_plan_*`
+for the simulated test and `sensor.smart_charging_live_*` for real charging):
+
+- **Energy (kWh)** — with `device_class: energy` + `state_class: total_increasing`,
+  so Home Assistant's recorder keeps the history and the Energy dashboard picks
+  them up.
+- **Saving** — money saved *versus the day's average price* of the same day
+  (from the forecast sensor's `days` attribute; falls back to the mean of the
+  whole forecast). A forced expensive hour (battery floor) correctly shows a
+  *negative* contribution.
+- **Average price** — the energy-weighted average of what was paid per kWh.
+
+### Plan mode = simulation
+
+While in **Planläge (test)** the accumulated totals are **simulated**: every
+planned hour that passes is counted as charged (`power_kw × duration` at that
+hour's price), minute-precise for the currently ongoing hour. This is fully
+disconnected from the car — exactly the overview you want before going live.
+
+### Live mode = measurement
+
+In **Live** the energy is **measured**. Configure the optional
+**Charging energy sensor** in the options (e.g. your Zaptec charging-energy
+sensor in kWh, or a kW power sensor — both units are auto-detected). While the
+integration drives a charging session it samples the sensor every 60 seconds
+and accrues the measured kWh at the price of the clock hour it is measured in.
+
+Without a configured energy sensor the SOC fallback is used (SOC delta ×
+battery capacity per session, same architecture as the energy accrual). The
+`source` attribute on the sensors tells you which it was (`energy_sensor`,
+`soc` or `simulation`).
+
+> **Note:** with a cumulative energy sensor, the first ~≤15 min of a session
+> (between pressing *resume* and the next plan recompute) are usually included
+> thanks to a baseline sampled at resume time — but energy consumed before the
+> integration first detects the charge may be missed.
+
+### Reset
+
+Use the `smart_charging.reset_statistics` service to zero the counters
+(`mode`: `plan`, `live` or `all`), e.g. at the start of every month or after a
+test period. Reset does not re-accrue history.
+
+### Dashboard example
+
+```yaml
+type: entities
+entities:
+  - entity: sensor.smart_charging_plan_energy
+  - entity: sensor.smart_charging_plan_saving
+  - entity: sensor.smart_charging_plan_avg_price
+  - entity: sensor.smart_charging_live_energy
+  - entity: sensor.smart_charging_live_saving
+  - entity: sensor.smart_charging_live_avg_price
+```
+
+The `energy` sensors also appear in the Energy dashboard, and the `avg_price`
+sensors render a price-per-kWh history from the recorder.
 
 ## Price data format
 

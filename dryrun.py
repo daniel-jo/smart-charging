@@ -256,6 +256,27 @@ def main() -> int:
             f"{s.power_kw} kW  avg {s.avg_price_kwh:.4f} {args.currency}/kWh"
             f"  ({len(s.hours)} h){tag}"
         )
+
+    # Projected statistics — exactly what the Plan-mode simulation accrues.
+    if plan.sessions:
+        projected = helper.ChargingStats()
+        for s in plan.sessions:
+            for hour in s.hours:
+                ref = helper.reference_price_kwh(day_prices, hour["start"], None)
+                projected = helper.accrue_charging(
+                    projected,
+                    s.power_kw * float(hour.get("duration_hours", 1.0)),
+                    float(hour["price_kwh"]),
+                    ref or 0.0,
+                    at=hour["start"],
+                )
+        avg = projected.avg_price_kwh if projected.kwh > 1e-9 else 0.0
+        saved = projected.saved if projected.kwh > 1e-9 else 0.0
+        print(
+            f"\nProjected plan totals: {projected.kwh:.1f} kWh at avg "
+            f"{avg:.3f} {args.currency}/kWh, saved {saved:.2f} "
+            f"{args.currency} vs the day average"
+        )
     return 0
 
 
