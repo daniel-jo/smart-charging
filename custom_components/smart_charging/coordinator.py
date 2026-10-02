@@ -137,6 +137,10 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         # NB: this must NOT be called `_listeners` — DataUpdateCoordinator
         # already uses that name as a dict for CoordinatorEntity subscriptions.
         self._listener_unsubs: list[CALLBACK_TYPE] = []
+        # Home Assistant start listener — tracked separately (not in
+        # _listener_unsubs) so it can unsubscribe itself exactly once, which
+        # makes reload/unload idempotent after HOMEASSISTANT_START has fired.
+        self._hass_start_unsub: Optional[CALLBACK_TYPE] = None
         self._last_action_signature: Optional[str] = None
         self._last_summary: Optional[str] = None
         self._mode: str = str(entry.data.get("mode", MODE_PLAN))
@@ -229,10 +233,8 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
                         self._on_entity_change,
                     )
                 )
-        self._listener_unsubs.append(
-            self.hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_START, self._async_first_refresh
-            )
+        self._hass_start_unsub = self.hass.bus.async_listen(
+            EVENT_HOMEASSISTANT_START, self._async_first_refresh
         )
         # Note: older HA core used async_set_update_interval() here, but that
         # method no longer exists — update_interval is a settable property.
@@ -247,6 +249,11 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
 
     def async_unload(self) -> None:
         """Remove listeners."""
+        # The start listener may already have removed itself (event fired) —
+        # the None guard makes this safe to call at any point after setup.
+        if self._hass_start_unsub is not None:
+            self._hass_start_unsub()
+            self._hass_start_unsub = None
         if self._deadline_timer is not None:
             self._deadline_timer()
             self._deadline_timer = None
@@ -270,7 +277,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         loop — HA may otherwise invoke a sync listener off-loop and
         ``hass.async_create_task`` there is thread-unsafe (a hard error in
         newer HA).
+
+        Unsubscribes itself first so a later config-entry reload (which runs
+        while HA is already started) never tries to remove this listener twice.
         """
+        if self._hass_start_unsub is not None:
+            self._hass_start_unsub()
+            self._hass_start_unsub = None
         await self.async_request_refresh()
 
     async def _on_entity_change(self, _event: Any) -> None:

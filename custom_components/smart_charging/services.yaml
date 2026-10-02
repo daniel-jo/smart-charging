@@ -1,0 +1,20 @@
+reset_statistics:
+  name: Reset statistics
+  description: >-
+    Reset the accumulated Smart Charging statistics. Resets the Plan mode
+    (simulated) and/or Live mode (measured) energy, saving and average price
+    ledgers stored by the integration.
+  fields:
+    mode:
+      name: Mode
+      description: >-
+        Which statistics ledger to reset: all, plan (simulated test mode) or
+        live (measured real charging).
+      required: false
+      default: all
+      selector:
+        select:
+          options:
+            - all
+            - plan
+            - live

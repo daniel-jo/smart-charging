@@ -235,8 +235,11 @@ class SmartChargingStatsSensor(CoordinatorEntity, SensorEntity):
     def device_class(self) -> Optional[str]:
         if self._kind == "energy":
             return SensorDeviceClass.ENERGY
-        if self._kind == "saving":
-            return SensorDeviceClass.MONETARY
+        # ``saving`` (and ``avg_price``) deliberately expose no device class: a
+        # ``monetary`` device class only permits a ``total``/``None`` state
+        # class, while savings may tick down (a forced expensive hour posts a
+        # negative contribution) — so it must stay ``measurement``. The currency
+        # is still shown via native_unit_of_measurement.
         return None
 
     @property
