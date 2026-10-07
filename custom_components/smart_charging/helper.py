@@ -117,6 +117,14 @@ class Plan:
     deadline_time: Optional[str] = None
     deadline_next: Optional[datetime] = None
     deadline_restart_at: Optional[datetime] = None
+    # Continuous usage ("away-window") model — when enabled, replaces the
+    # deadline / restart settings: the car is away on the configured days in the
+    # ``usage_away_start`` → ``usage_away_end`` window and drains only then.
+    usage_enabled: bool = False
+    usage_days: str = "weekdays"
+    usage_away_start: str = ""
+    usage_away_end: str = ""
+    usage_next: Optional[datetime] = None
 
 
 def floor_hour(dt: datetime) -> datetime:
@@ -238,6 +246,11 @@ def compute_plan(
     weekly_full_charge: bool = False,
     last_full_charge: Optional[datetime] = None,
     min_days_between_full: float = 5.0,
+    # --- continuous usage ("away-window") model -------------------------------
+    usage_enabled: bool = False,
+    usage_days: str = "weekdays",  # "weekdays" | "all_days"
+    usage_away_start: str = "",  # "HH:MM" — car leaves (the new "ready by")
+    usage_away_end: str = "",  # "HH:MM" — car returns
     deadline: Optional[datetime] = None,
     deadline_time: Optional[str] = None,
     deadline_restart_minutes: float = 0.0,
@@ -276,6 +289,21 @@ def compute_plan(
         Timestamp of the last 100 % charge (cooldown anchor).
     min_days_between_full
         Minimum days between two 100 % charges.
+    usage_enabled
+        When ``True``, the plan uses the "continuous usage"/away-window model
+        instead of the legacy deadline settings: on the selected days
+        (``usage_days``) the car is *away* between ``usage_away_start`` and
+        ``usage_away_end``. It can only charge while home (``usage_away_end`` →
+        ``usage_away_start``) and drains the battery only while away.
+        ``usage_away_start`` acts as the "ready by" — charging must be complete
+        before it. ``daily_consumption_pct`` is spread over the away hours.
+    usage_days
+        ``"weekdays"`` (default) — the away-window applies Mon–Fri only; on
+        weekends the car is home all day (no deadline, no drain). ``"all_days"``
+        — the window applies every day.
+    usage_away_start / usage_away_end
+        Times of day (``"HH:MM"``) when the car leaves and returns, interpreted
+        in ``deadline_timezone``. ``usage_away_start`` is the new "ready by".
     deadline
         Optional legacy absolute deadline datetime — no charging planned at or
         after it (kept for backward compatibility).
@@ -312,6 +340,10 @@ def compute_plan(
             last_full_charge=last_full_charge,
             day_prices=list(day_prices) if day_prices else [],
             deadline_time=deadline_time or None,
+            usage_enabled=usage_enabled,
+            usage_days=usage_days,
+            usage_away_start=usage_away_start if usage_enabled else "",
+            usage_away_end=usage_away_end if usage_enabled else "",
         )
 
     # --- Guards -------------------------------------------------------------
@@ -380,7 +412,7 @@ def compute_plan(
     #    (``0`` = never) it re-arms and the plan runs against the *next* day's
     #    deadline.
     eff_deadline: Optional[datetime] = None
-    tod = _parse_time_of_day(deadline_time)
+    tod = None if usage_enabled else _parse_time_of_day(deadline_time)
     if tod is not None:
         tz = deadline_timezone if deadline_timezone is not None else timezone.utc
         local_now = now.astimezone(tz)
@@ -402,7 +434,7 @@ def compute_plan(
                     action="stop", at=now_hour, reason="deadline"
                 )
                 return plan
-    elif deadline is not None:
+    elif deadline is not None and not usage_enabled:
         eff_deadline = deadline
 
     if eff_deadline is not None:
@@ -420,6 +452,53 @@ def compute_plan(
     plan.deadline_next = eff_deadline
     n = len(future)
 
+    # --- Away-window availability & drain profile ("continuous usage") --------
+    # When enabled, the car can charge only while home (usage_away_end →
+    # usage_away_start on the selected days) and drains only while away, so the
+    # constant per-hour drain (pct_cons_h) is replaced by a per-hour profile.
+    # When disabled the profile degenerates to the legacy behaviour: every hour
+    # chargeable at its full (possibly deadline-cut) duration, uniform drain.
+    usage_next: Optional[datetime] = None
+    away_start_min = away_end_min = 0
+    away_minutes = 0
+    if usage_enabled:
+        away_start_hm = _parse_time_of_day(usage_away_start)
+        away_end_hm = _parse_time_of_day(usage_away_end)
+        if away_start_hm is not None and away_end_hm is not None:
+            away_start_min = away_start_hm[0] * 60 + away_start_hm[1]
+            away_end_min = away_end_hm[0] * 60 + away_end_hm[1]
+            away_minutes = (away_start_min - away_end_min) % (24 * 60)
+            tz = deadline_timezone if deadline_timezone is not None else timezone.utc
+            usage_next = _usage_next_transition(
+                now, tz, usage_days, away_start_min, away_end_min
+            )
+
+    if usage_enabled and away_minutes > 0:
+        tz = deadline_timezone if deadline_timezone is not None else timezone.utc
+        drain_per_min = max(0.0, daily_consumption_pct) / away_minutes  # SOC %/min
+        charge_frac = [0.0] * n
+        drain = [0.0] * n
+        for idx, h in enumerate(future):
+            local = h.start.astimezone(tz)
+            if not _usage_day_applies(usage_days, local):
+                charge_frac[idx] = 1.0
+                drain[idx] = 0.0
+                continue
+            minutes_of_day = local.hour * 60 + local.minute
+            away_frac = _usage_away_fraction(minutes_of_day, away_start_min, away_end_min)
+            charge_frac[idx] = 1.0 - away_frac
+            drain[idx] = drain_per_min * away_frac * 60.0
+    else:
+        charge_frac = [h.duration_hours for h in future]
+        drain = [pct_cons_h] * n
+
+    plan.usage_next = usage_next
+
+    # Prefix sums of the drain (SOC %): drain_cum[k] = sum(drain[:k]).
+    drain_cum = [0.0] * (n + 1)
+    for _k in range(n):
+        drain_cum[_k + 1] = drain_cum[_k] + drain[_k]
+
     # --- Weekly 100 % boost window -----------------------------------------
     # Eligible on/after `bound` (cooldown since the last full charge). Picks
     # the cheapest *contiguous* stretch long enough to reach 100 %, so a
@@ -436,17 +515,16 @@ def compute_plan(
         starts = [i for i in range(n) if future[i].start >= bound]
         best: Optional[tuple[float, int, int]] = None
         for i in starts:
-            hours_elapsed = (future[i].start - now_hour) / timedelta(hours=1)
-            est = max(floor, soc - pct_cons_h * hours_elapsed)
+            est = max(floor, soc - drain_cum[i])
             if est >= 100.0:
                 continue
-            # Smallest window whose *accumulated duration* reaches 100 % (the
-            # final hour may be partial when a deadline cuts the horizon).
+            # Smallest window whose *accumulated chargeable duration* reaches
+            # 100 % (the final hour may be partial on a deadline/away cut).
             need = 100.0 - est
             j = i
             acc = 0.0
             while j < n and acc * rate + 1e-9 < need:
-                acc += future[j].duration_hours
+                acc += charge_frac[j]
                 j += 1
             if acc * rate + 1e-9 < need:
                 continue
@@ -474,19 +552,25 @@ def compute_plan(
 
     # --- Chronological greedy ------------------------------------------------
     # Walk the forecast hour by hour. Charge when:
-    #   1. it is a boost hour (mandatory, capped at 100 %);
-    #   2. the hour is cheap (<= auto cheap_cut) and the battery is below the
-    #      normal cap (top-up, capped at max_soc);
-    #   3. the floor is threatened before the horizon ends — then buy the
-    #      cheapest hour inside the survival window (floor forcing), even if
-    #      that hour is not "cheap".
+    #   1. it is a boost hour (mandatory, capped at 100 %) and the car is home;
+    #   2. the hour is cheap (<= auto cheap_cut), the car is home and the battery
+    #      is below the normal cap (top-up, capped at max_soc);
+    #   3. the floor is threatened before a chargeable hour is available — then
+    #      buy the cheapest chargeable hour inside the survival window (floor
+    #      forcing), even if that hour is not "cheap".
     selected: list[PriceHour] = []
+    selected_frac: list[float] = []
 
-    def _charge_hour(hour: PriceHour, session_cap: float) -> None:
-        """Append one charging hour (partial only when a deadline cuts it)."""
+    def _charge_hour(hour: PriceHour, session_cap: float, frac: float) -> None:
+        """Append one charging hour (partial on a deadline/away cut)."""
         nonlocal soc
-        soc = min(session_cap, soc + rate * hour.duration_hours)
+        soc = min(session_cap, soc + rate * frac)
         selected.append(hour)
+        selected_frac.append(frac)
+
+    def _drain_span(i: int, j: int) -> float:
+        """Cumulative SOC % drained over future hours [i, j)."""
+        return drain_cum[j] - drain_cum[i]
 
     i = 0
     while i < n:
@@ -494,64 +578,75 @@ def compute_plan(
         is_boost_hour = hour.start in boost_starts
         session_cap = 100.0 if is_boost_hour else cap
 
-        if is_boost_hour or (hour.price_kwh <= cheap_cut and soc < session_cap):
-            _charge_hour(hour, session_cap)
+        if charge_frac[i] > 1e-9 and (
+            is_boost_hour or (hour.price_kwh <= cheap_cut and soc < session_cap)
+        ):
+            _charge_hour(hour, session_cap, charge_frac[i])
             i += 1
             continue
 
         # Not charging this hour. Skip it — unless the floor would be breached
-        # before the horizon ends without a charge.
+        # before any chargeable hour is available (the car may be away).
         if (
-            pct_cons_h > 0
-            and soc < session_cap
-            and (soc - floor) / pct_cons_h < (n - i)
+            soc < session_cap
+            and drain_cum[i] < drain_cum[n]
+            and drain_cum[n] - drain_cum[i] > (soc - floor) + 1e-9
         ):
-            win_end = min(n, i + max(1, int((soc - floor) / pct_cons_h) + 1))
-            if win_end > i:
-                j = min(range(i, win_end), key=lambda k: future[k].price_kwh)
+            win_end = i + 1
+            while win_end <= n and soc - _drain_span(i, win_end) >= floor - 1e-9:
+                win_end += 1
+            # Cheapest hour the car can actually charge within the survival window.
+            j = min(
+                (k for k in range(i, win_end) if charge_frac[k] > 1e-9),
+                key=lambda k: future[k].price_kwh,
+                default=None,
+            )
+            if j is not None:
                 if j > i:
-                    # Cheapest usable hour is later — wait for it.
-                    soc = max(floor, soc - pct_cons_h * (j - i))
+                    # Cheapest usable hour is later — wait for it (drain the way).
+                    soc = max(floor, soc - _drain_span(i, j))
                     i = j
                     continue
-                # j == i — this is the cheapest hour we can use in time;
-                # charge it even though it is above the cheap cut.
-                _charge_hour(hour, session_cap)
+                # j == i — cheapest hour we can use in time; charge it even though
+                # it is above the cheap cut.
+                _charge_hour(hour, session_cap, charge_frac[i])
                 i += 1
                 continue
 
         # Skip this hour: the battery drains a little, nothing to do.
-        soc = max(floor, soc - pct_cons_h)
+        soc = max(floor, soc - drain[i])
         i += 1
 
     # --- Sessions -------------------------------------------------------------
     sessions: list[ChargingSession] = []
     if selected:
-        runs: list[list[PriceHour]] = []
-        run = [selected[0]]
-        for prev, cur in zip(selected, selected[1:]):
-            if cur.start == prev.start + timedelta(hours=1):
-                run.append(cur)
+        runs: list[list[int]] = []
+        run = [0]
+        for k in range(1, len(selected)):
+            if selected[k].start == selected[k - 1].start + timedelta(hours=1):
+                run.append(k)
             else:
                 runs.append(run)
-                run = [cur]
+                run = [k]
         runs.append(run)
         for run in runs:
-            is_boost = any(h.start in boost_starts for h in run)
-            avg_price = round(mean(h.price_kwh for h in run), 4)
+            run_hours = [selected[k] for k in run]
+            is_boost = any(h.start in boost_starts for h in run_hours)
+            avg_price = round(mean(h.price_kwh for h in run_hours), 4)
+            total_h = sum(selected_frac[k] for k in run)
             sessions.append(
                 ChargingSession(
-                    start=run[0].start,
-                    end=run[-1].start + timedelta(hours=run[-1].duration_hours),
+                    start=run_hours[0].start,
+                    end=run_hours[0].start + timedelta(hours=total_h),
                     power_kw=charger_max_kw,
                     avg_price_kwh=avg_price,
                     hours=[
                         {
-                            "start": h.start,
-                            "price_kwh": h.price_kwh,
-                            "duration_hours": h.duration_hours,
+                            "start": selected[k].start,
+                            "price_kwh": selected[k].price_kwh,
+                            "duration_hours": selected_frac[k],
                         }
-                        for h in run
+                        for k in run
                     ],
                     is_boost=is_boost,
                 )
@@ -591,6 +686,14 @@ def compute_plan(
             plan.next_action = NextAction(action="stop", at=now_hour, reason="complete")
         else:
             plan.next_action = NextAction(action="stop", at=now_hour, reason="gap")
+
+    # Continuous usage: when the car is currently away, tell when it returns.
+    if usage_enabled and away_minutes > 0:
+        tz = deadline_timezone if deadline_timezone is not None else timezone.utc
+        if _usage_is_away(now, tz, usage_days, away_start_min, away_end_min):
+            until = usage_next.strftime("%H:%M") if usage_next is not None else ""
+            prefix = f"Borta t.o.m. {until}" if until else "Borta"
+            plan.summary = f"{prefix} — {plan.summary}" if plan.summary else prefix
 
     return plan
 
@@ -907,3 +1010,78 @@ def _build_summary(sessions: list[ChargingSession], currency: str) -> str:
     if len(sessions) > 2:
         parts.append(f"+{len(sessions) - 2} till")
     return " / ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Continuous usage ("away-window") helpers
+# ---------------------------------------------------------------------------
+
+
+def _usage_day_applies(usage_days: str, local_dt: datetime) -> bool:
+    """True when the away-window applies on the day of ``local_dt``."""
+    return usage_days == "all_days" or local_dt.weekday() < 5
+
+
+def _usage_away_fraction(
+    minutes_of_day: int, away_start_min: int, away_end_min: int
+) -> float:
+    """Fraction of the hour starting at ``minutes_of_day`` that the car is away.
+
+    The away window is ``[away_start, away_end)`` and may cross midnight
+    (e.g. away 22:00→06:00, or the common day window 07:00→17:00).
+    """
+    if away_start_min == away_end_min:
+        return 0.0
+    if away_start_min < away_end_min:
+        intervals = [(away_start_min, away_end_min)]
+    else:
+        intervals = [(away_start_min, 24 * 60), (0, away_end_min)]
+    total = 0.0
+    for a, b in intervals:
+        total += max(0.0, min(minutes_of_day + 60, b) - max(minutes_of_day, a))
+    return total / 60.0
+
+
+def _usage_is_away(
+    now: datetime,
+    tz: tzinfo,
+    usage_days: str,
+    away_start_min: int,
+    away_end_min: int,
+) -> bool:
+    """True when ``now`` falls inside the away-window on an applicable day."""
+    local = now.astimezone(tz)
+    if not _usage_day_applies(usage_days, local):
+        return False
+    if away_start_min == away_end_min:
+        return False
+    minutes_of_day = local.hour * 60 + local.minute
+    if away_start_min < away_end_min:
+        return away_start_min <= minutes_of_day < away_end_min
+    return minutes_of_day >= away_start_min or minutes_of_day < away_end_min
+
+
+def _usage_next_transition(
+    now: datetime,
+    tz: tzinfo,
+    usage_days: str,
+    away_start_min: int,
+    away_end_min: int,
+) -> Optional[datetime]:
+    """Next moment (leave or return) the away-window state changes, or ``None``.
+
+    Used by the coordinator to recompute exactly at the transition.
+    """
+    local_now = now.astimezone(tz)
+    candidates: list[datetime] = []
+    for offset in range(14):
+        day = local_now + timedelta(days=offset)
+        if not _usage_day_applies(usage_days, day):
+            continue
+        for minutes in (away_start_min, away_end_min):
+            candidate = day.replace(
+                hour=minutes // 60, minute=minutes % 60, second=0, microsecond=0
+            )
+            if candidate > now:
+                candidates.append(candidate)
+    return min(candidates) if candidates else None

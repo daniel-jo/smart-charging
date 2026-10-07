@@ -77,6 +77,7 @@ hacs.json                           HACS metadata
 | Price currency | Labels the prices; nothing is converted |
 | Ready by (time, optional) | Daily deadline — charging is complete *before* this, minute precise |
 | Restart after deadline (min, 0 = never) | After the deadline passes, wait this long before charging may start again |
+| Continuous usage (checkbox) | Regular away-times replace the deadline: the car charges only while home |
 
 ### Deadline (optional)
 
@@ -96,6 +97,25 @@ hacs.json                           HACS metadata
 - Backwards compatibility: an old deadline `input_datetime` from the previous
   UI is still honoured for its clock time (the date is ignored). The picker has
   moved from the *entities* step into *parameters*.
+
+### Continuous usage (optional)
+
+Ticking **"Continuous usage"** (`Kontinuerlig körning`) replaces the
+`ready by` / `restart after deadline` model with your weekly rhythm:
+
+- **Applies to** — `weekdays` (Mon–Fri) or `all days`.
+- **Usually away from / until** — the window the car is normally gone.
+
+- While the car is **home** (`away until` → `away from`) it may charge; while
+  it is **away** it never charges.
+- The **"from" time is the new "ready by"**: charging must be *complete* before
+  it (minute precise), because that is when the car leaves.
+- **The daily consumption is used only while the car is away** — parked at home
+  the battery stays put, so `daily battery use` is spread over the away hours.
+- On **non-applicable days** (weekends with `weekdays`) the car is home all day:
+  no deadline and no consumption.
+- While away, the summary reads `Borta t.o.m. HH:MM — …`.
+- `ready by` / `restart after deadline` are ignored when the checkbox is on.
 
 ## Modes
 

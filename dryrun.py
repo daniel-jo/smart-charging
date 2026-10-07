@@ -150,6 +150,27 @@ def main() -> int:
         help="Minutes after a passed deadline before charging may restart (0 = never)",
     )
     parser.add_argument(
+        "--usage", action="store_true", help="Enable continuous usage (away-window)"
+    )
+    parser.add_argument(
+        "--usage-days",
+        type=str,
+        default="weekdays",
+        help="weekdays | all_days (with --usage)",
+    )
+    parser.add_argument(
+        "--usage-away-start",
+        type=str,
+        default="",
+        help="Car leaves at 'HH:MM' - the new ready-by (with --usage)",
+    )
+    parser.add_argument(
+        "--usage-away-end",
+        type=str,
+        default="",
+        help="Car returns at 'HH:MM' (with --usage)",
+    )
+    parser.add_argument(
         "--timezone",
         type=str,
         default="UTC",
@@ -203,6 +224,10 @@ def main() -> int:
         weekly_full_charge=args.weekly_full,
         last_full_charge=last_full,
         min_days_between_full=args.min_days_between_full,
+        usage_enabled=args.usage,
+        usage_days=args.usage_days,
+        usage_away_start=args.usage_away_start,
+        usage_away_end=args.usage_away_end,
         deadline=deadline,
         deadline_time=args.deadline_time or None,
         deadline_restart_minutes=args.deadline_restart_min,
@@ -231,6 +256,11 @@ def main() -> int:
         print(
             f"Deadline time:   {args.deadline_time} "
             f"(tz {args.timezone}, restart {args.deadline_restart_min} min)"
+        )
+    if args.usage:
+        print(
+            f"Continuous usage: {args.usage_days}, away "
+            f"{args.usage_away_start or '??:??'}-{args.usage_away_end or '??:??'}"
         )
     print(f"Now:             {now.isoformat()}")
     print(f"Price source:    {price_source}")

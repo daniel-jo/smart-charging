@@ -151,6 +151,11 @@ class SmartChargingPlanSensor(CoordinatorEntity, SensorEntity):
             "deadline_time": plan.deadline_time,
             "deadline_next": _iso(plan.deadline_next),
             "deadline_restart_at": _iso(plan.deadline_restart_at),
+            "usage_enabled": plan.usage_enabled,
+            "usage_days": plan.usage_days,
+            "usage_away_start": plan.usage_away_start,
+            "usage_away_end": plan.usage_away_end,
+            "usage_next": _iso(plan.usage_next),
             "day_prices": [
                 {
                     "date": d.date,

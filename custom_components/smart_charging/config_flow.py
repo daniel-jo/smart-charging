@@ -40,6 +40,10 @@ from .const import (
     CONF_MIN_SOC,
     CONF_SOC_ENTITY,
     CONF_SPOT_PRICES_ENTITY,
+    CONF_USAGE_AWAY_END,
+    CONF_USAGE_AWAY_START,
+    CONF_USAGE_DAYS,
+    CONF_USAGE_ENABLED,
     CONF_WEEKLY_FULL_CHARGE,
     CURRENCY_OPTIONS,
     DEFAULT_BATTERY_CAPACITY_KWH,
@@ -50,9 +54,12 @@ from .const import (
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_DAYS_BETWEEN_FULL,
     DEFAULT_MIN_SOC,
+    DEFAULT_USAGE_DAYS,
+    DEFAULT_USAGE_ENABLED,
     DEFAULT_WEEKLY_FULL_CHARGE,
     DOMAIN,
     MODE_PLAN,
+    USAGE_DAY_OPTIONS,
 )
 
 # OptionsFlowWithReload only exists on Home Assistant >= 2025.9; fall back to
@@ -205,6 +212,12 @@ def _params_schema(current: dict[str, Any]) -> vol.Schema:
             ): selector.selector(
                 {"number": {"mode": "box", "min": 1, "max": 30, "step": 1}}
             ),
+            vol.Required(
+                CONF_USAGE_ENABLED,
+                default=_as_bool(
+                    current.get(CONF_USAGE_ENABLED), DEFAULT_USAGE_ENABLED
+                ),
+            ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_DEADLINE_TIME,
                 default=_entity_option(current.get(CONF_DEADLINE_TIME, "")),
@@ -225,6 +238,55 @@ def _params_schema(current: dict[str, Any]) -> vol.Schema:
     )
 
 
+def _normalize_hm(value: Any) -> str:
+    """Normalise a time string ("HH:MM", "HH:MM:SS") to "HH:MM"."""
+    parts = str(value).strip().split(":")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+    except (ValueError, IndexError):
+        return ""
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return ""
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _usage_schema(current: dict[str, Any]) -> vol.Schema:
+    """The away-window step shown when "continuous usage" is enabled."""
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_USAGE_DAYS,
+                default=current.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS),
+            ): selector.selector(
+                {"select": {"options": list(USAGE_DAY_OPTIONS), "mode": "dropdown"}}
+            ),
+            vol.Required(
+                CONF_USAGE_AWAY_START,
+                default=current.get(CONF_USAGE_AWAY_START, ""),
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_USAGE_AWAY_END,
+                default=current.get(CONF_USAGE_AWAY_END, ""),
+            ): selector.TimeSelector(),
+        }
+    )
+
+
+def _validate_usage(user_input: dict[str, Any]) -> dict[str, str]:
+    """Validate the away-window fields; returns a field -> error-key map."""
+    errors: dict[str, str] = {}
+    start = _normalize_hm(user_input.get(CONF_USAGE_AWAY_START, ""))
+    end = _normalize_hm(user_input.get(CONF_USAGE_AWAY_END, ""))
+    if not start:
+        errors[CONF_USAGE_AWAY_START] = "usage_required"
+    if not end:
+        errors[CONF_USAGE_AWAY_END] = "usage_required"
+    if start and end and start == end:
+        errors[CONF_USAGE_AWAY_END] = "usage_same_time"
+    return errors
+
+
 class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Smart Charging."""
 
@@ -233,6 +295,7 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the flow."""
         self._entity_data: dict[str, Any] = {}
+        self._params_data: dict[str, Any] = {}
 
     async def async_step_user(
         self, user_input: Optional[dict[str, Any]] = None
@@ -267,15 +330,44 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         entity_data = getattr(self, "_entity_data", {})
         if user_input is not None:
-            data = dict(entity_data)
-            data.update(user_input)
-            data[CONF_MODE] = MODE_PLAN
-            return self.async_create_entry(title="Smart Charging", data=data)
+            if _as_bool(user_input.get(CONF_USAGE_ENABLED), DEFAULT_USAGE_ENABLED):
+                self._params_data = dict(user_input)
+                return self.async_show_form(
+                    step_id="usage",
+                    data_schema=_usage_schema({}),
+                    errors={},
+                    last_step=True,
+                )
+            return self.async_create_entry(
+                title="Smart Charging",
+                data={**entity_data, **user_input, CONF_MODE: MODE_PLAN},
+            )
 
         return self.async_show_form(
             step_id="params",
             data_schema=_params_schema(entity_data),
             errors=errors,
+        )
+
+    async def async_step_usage(
+        self, user_input: Optional[dict[str, Any]] = None
+    ) -> FlowResult:
+        """Step 2b: away-window (shown only when "continuous usage" is on)."""
+        errors: dict[str, str] = {}
+        entity_data = getattr(self, "_entity_data", {})
+        params_data = getattr(self, "_params_data", {})
+        if user_input is not None:
+            errors = _validate_usage(user_input)
+            if not errors:
+                return self.async_create_entry(
+                    title="Smart Charging",
+                    data={**entity_data, **params_data, **user_input, CONF_MODE: MODE_PLAN},
+                )
+        return self.async_show_form(
+            step_id="usage",
+            data_schema=_usage_schema(user_input or params_data),
+            errors=errors,
+            last_step=True,
         )
 
     @staticmethod
@@ -299,6 +391,8 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
+        self._entity_data: dict[str, Any] = {}
+        self._params_data: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: Optional[dict[str, Any]] = None
@@ -337,6 +431,14 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
                     CONF_DEADLINE_RESTART_MINUTES: entry_data.get(
                         CONF_DEADLINE_RESTART_MINUTES, DEFAULT_DEADLINE_RESTART_MINUTES
                     ),
+                    CONF_USAGE_ENABLED: entry_data.get(
+                        CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED
+                    ),
+                    CONF_USAGE_DAYS: entry_data.get(
+                        CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS
+                    ),
+                    CONF_USAGE_AWAY_START: entry_data.get(CONF_USAGE_AWAY_START, ""),
+                    CONF_USAGE_AWAY_END: entry_data.get(CONF_USAGE_AWAY_END, ""),
                     # Keep the stored currency; falls back to the default in
                     # _params_schema when unset.
                     CONF_CURRENCY: entry_data.get(CONF_CURRENCY),
@@ -370,6 +472,14 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
             {**self._config_entry.data, **self._config_entry.options},
         )
         if user_input is not None:
+            if _as_bool(user_input.get(CONF_USAGE_ENABLED), DEFAULT_USAGE_ENABLED):
+                self._params_data = dict(user_input)
+                return self.async_show_form(
+                    step_id="usage",
+                    data_schema=_usage_schema({}),
+                    errors={},
+                    last_step=True,
+                )
             data = dict(self._config_entry.data)
             data.update(entity_data)
             data.update(user_input)
@@ -379,4 +489,30 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
             step_id="params",
             data_schema=_params_schema(entity_data),
             errors=errors,
+        )
+
+    async def async_step_usage(
+        self, user_input: Optional[dict[str, Any]] = None
+    ) -> FlowResult:
+        """Away-window step (only reached when "continuous usage" is on)."""
+        errors: dict[str, str] = {}
+        entity_data = getattr(
+            self,
+            "_entity_data",
+            {**self._config_entry.data, **self._config_entry.options},
+        )
+        params_data = getattr(self, "_params_data", {})
+        if user_input is not None:
+            errors = _validate_usage(user_input)
+            if not errors:
+                data = dict(self._config_entry.data)
+                data.update(entity_data)
+                data.update(params_data)
+                data.update(user_input)
+                return self.async_create_entry(title="", data=data)
+        return self.async_show_form(
+            step_id="usage",
+            data_schema=_usage_schema(user_input or params_data),
+            errors=errors,
+            last_step=True,
         )

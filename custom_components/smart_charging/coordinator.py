@@ -50,6 +50,10 @@ from .const import (
     CONF_MIN_SOC,
     CONF_SOC_ENTITY,
     CONF_SPOT_PRICES_ENTITY,
+    CONF_USAGE_AWAY_END,
+    CONF_USAGE_AWAY_START,
+    CONF_USAGE_DAYS,
+    CONF_USAGE_ENABLED,
     CONF_WEEKLY_FULL_CHARGE,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_CHARGER_MAX_KW,
@@ -61,6 +65,8 @@ from .const import (
     DEFAULT_MIN_SOC,
     DEFAULT_STATS_SAMPLE_SECONDS,
     DEFAULT_UPDATE_INTERVAL_MINUTES,
+    DEFAULT_USAGE_DAYS,
+    DEFAULT_USAGE_ENABLED,
     DEFAULT_WEEKLY_FULL_CHARGE,
     DOMAIN,
     MODE_LIVE,
@@ -108,6 +114,10 @@ def resolve_options(entry: ConfigEntry) -> dict:
         CONF_DEADLINE_RESTART_MINUTES: entry.data.get(
             CONF_DEADLINE_RESTART_MINUTES, DEFAULT_DEADLINE_RESTART_MINUTES
         ),
+        CONF_USAGE_ENABLED: entry.data.get(CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED),
+        CONF_USAGE_DAYS: entry.data.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS),
+        CONF_USAGE_AWAY_START: entry.data.get(CONF_USAGE_AWAY_START, ""),
+        CONF_USAGE_AWAY_END: entry.data.get(CONF_USAGE_AWAY_END, ""),
         CONF_MIN_SOC: entry.data.get(CONF_MIN_SOC, DEFAULT_MIN_SOC),
         CONF_MAX_SOC: entry.data.get(CONF_MAX_SOC, DEFAULT_MAX_SOC),
         CONF_BATTERY_CAPACITY_KWH: entry.data.get(
@@ -300,6 +310,8 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             instants.append(plan.deadline_restart_at)
         if plan.deadline_next is not None:
             instants.append(plan.deadline_next)
+        if plan.usage_next is not None:
+            instants.append(plan.usage_next)
         future_instants = [
             dt_util.as_utc(t)
             for t in instants
@@ -363,6 +375,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             min_days_between_full=float(
                 opts.get(CONF_MIN_DAYS_BETWEEN_FULL, DEFAULT_MIN_DAYS_BETWEEN_FULL)
             ),
+            usage_enabled=_to_bool(
+                opts.get(CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED),
+                DEFAULT_USAGE_ENABLED,
+            ),
+            usage_days=str(opts.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS)),
+            usage_away_start=str(opts.get(CONF_USAGE_AWAY_START, "")),
+            usage_away_end=str(opts.get(CONF_USAGE_AWAY_END, "")),
             deadline_time=deadline_time,
             deadline_restart_minutes=deadline_restart_minutes,
             deadline_timezone=deadline_tz,

@@ -25,11 +25,25 @@
           "charger_max_kw": "Max charger power (kW)",
           "weekly_full_charge": "Charge to 100 % about once a week (cheapest window)",
           "min_days_between_full": "Minimum days between two 100 % charges",
+          "usage_enabled": "Continuous usage - the car has regular away-times",
           "deadline_time": "Ready by (time, optional) - charging complete before this",
           "deadline_restart_minutes": "Restart after a passed deadline (minutes, 0 = never)",
           "currency": "Price currency"
         }
+      },
+      "usage": {
+        "title": "Continuous usage",
+        "description": "When is the car usually away? Charging only happens while it is home, and the daily consumption is used only while it is away.",
+        "data": {
+          "usage_days": "Applies to",
+          "usage_away_start": "Usually away from",
+          "usage_away_end": "Usually away until"
+        }
       }
+    },
+    "error": {
+      "usage_required": "Both away times must be set",
+      "usage_same_time": "The away times must be different"
     }
   },
   "options": {
@@ -58,11 +72,25 @@
           "charger_max_kw": "Max charger power (kW)",
           "weekly_full_charge": "Charge to 100 % about once a week (cheapest window)",
           "min_days_between_full": "Minimum days between two 100 % charges",
+          "usage_enabled": "Continuous usage - the car has regular away-times",
           "deadline_time": "Ready by (time, optional) - charging complete before this",
           "deadline_restart_minutes": "Restart after a passed deadline (minutes, 0 = never)",
           "currency": "Price currency"
         }
+      },
+      "usage": {
+        "title": "Continuous usage",
+        "description": "When is the car usually away? Charging only happens while it is home, and the daily consumption is used only while it is away.",
+        "data": {
+          "usage_days": "Applies to",
+          "usage_away_start": "Usually away from",
+          "usage_away_end": "Usually away until"
+        }
       }
+    },
+    "error": {
+      "usage_required": "Both away times must be set",
+      "usage_same_time": "The away times must be different"
     }
   }
 }

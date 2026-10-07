@@ -691,6 +691,94 @@ def test_accrue_plan_hours_uses_day_reference_price():
 
 
 # ---------------------------------------------------------------------------
+# Continuous usage ("away-window") model
+# ---------------------------------------------------------------------------
+
+
+def test_usage_no_charging_while_away():
+    """While the car is away the plan must never schedule charging."""
+    plan = _cp(
+        price_hours=_day_night_prices(days=2),
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:00",
+        usage_away_end="17:00",
+    )
+    assert plan.sessions
+    for s in plan.sessions:
+        for h in s.hours:
+            assert not (7 <= h["start"].hour < 17)
+
+
+def test_usage_ready_by_from_time():
+    """The "from" time acts as the ready-by: charging is complete before it."""
+    plan = _cp(
+        price_hours=_day_night_prices(days=1, night=0.5, day=0.5),
+        soc_now=0.0,
+        min_soc=20.0,
+        max_soc=100.0,
+        usage_enabled=True,
+        usage_days="all_days",
+        usage_away_start="07:00",
+        usage_away_end="17:00",
+    )
+    assert plan.sessions
+    # No charging is ever scheduled inside the away window.
+    for s in plan.sessions:
+        for h in s.hours:
+            assert not (7 <= h["start"].hour < 17)
+    # The morning session is cut exactly at the leave time.
+    assert plan.sessions[0].end == BASE + timedelta(hours=7)
+
+
+def test_usage_weekend_home_all_day():
+    """On a weekend the car is home all day: daytime hours become chargeable."""
+    saturday = BASE + timedelta(days=2)
+    plan = _cp(
+        price_hours=_day_night_prices(days=3, night=1.4, day=0.5),
+        soc_now=15.0,
+        max_soc=100.0,
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:00",
+        usage_away_end="17:00",
+        now=saturday.replace(hour=8),
+    )
+    day_hours = [
+        h
+        for s in plan.sessions
+        for h in s.hours
+        if 9 <= h["start"].hour < 17 and h["start"].weekday() >= 5
+    ]
+    assert day_hours
+
+
+def test_usage_next_transition_is_leave_time():
+    plan = _cp(
+        price_hours=_day_night_prices(days=1),
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:30",
+        usage_away_end="17:00",
+        now=_now(0),
+    )
+    assert plan.usage_next == BASE + timedelta(hours=7, minutes=30)
+
+
+def test_usage_summary_shows_away_until():
+    plan = _cp(
+        price_hours=_day_night_prices(days=1),
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:00",
+        usage_away_end="17:00",
+        soc_now=50.0,
+        now=_now(10),
+    )
+    assert plan.summary.startswith("Borta t.o.m. 17:00")
+
+
+# ---------------------------------------------------------------------------
 # Run standalone
 # ---------------------------------------------------------------------------
 

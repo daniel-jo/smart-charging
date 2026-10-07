@@ -29,6 +29,17 @@ CONF_DEADLINE_ENTITY = "deadline_entity"  # legacy — only its clock time is us
 CONF_DEADLINE_TIME = "deadline_time"
 CONF_DEADLINE_RESTART_MINUTES = "deadline_restart_minutes"
 
+# --- usage (continuous usage / away-window) -------------------------------------
+CONF_USAGE_ENABLED = "usage_enabled"
+CONF_USAGE_DAYS = "usage_days"
+CONF_USAGE_AWAY_START = "usage_away_start"
+CONF_USAGE_AWAY_END = "usage_away_end"
+USAGE_DAY_OPTIONS = ["weekdays", "all_days"]
+
+DEFAULT_USAGE_ENABLED = False
+DEFAULT_USAGE_DAYS = "weekdays"
+
+
 CONF_MIN_SOC = "min_soc"
 CONF_MAX_SOC = "max_soc"
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
