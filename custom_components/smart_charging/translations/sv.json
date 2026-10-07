@@ -16,7 +16,7 @@
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in batterigränser, priser, veckans 100 %-laddning och — när bilen har regelbundna borta-tider — borta-fönstret. Kryssa i \"Kontinuerlig körning\" så används borta-tiderna plus den dagliga förbrukningen nedan av planen; från-tiden är den nya \"klar till\".",
+        "description": "Ställ in batterigränser, priser, veckans 100 %-laddning och — när bilen har regelbundna borta-tider — borta-fönstret. Kryssa i \"Kontinuerlig körning\" så används borta-tiderna plus den dagliga förbrukningen nedan av planen; avgångstiden styr när laddningen måste vara klar.",
         "data": {
           "min_soc": "Minsta batterinivå (%), planera aldrig under detta",
           "max_soc": "Maximal batterinivå (%), normal laddgräns",
@@ -55,7 +55,7 @@
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in batterigränser, priser, veckans 100 %-laddning och — när bilen har regelbundna borta-tider — borta-fönstret. Kryssa i \"Kontinuerlig körning\" så används borta-tiderna plus den dagliga förbrukningen nedan av planen; från-tiden är den nya \"klar till\".",
+        "description": "Ställ in batterigränser, priser, veckans 100 %-laddning och — när bilen har regelbundna borta-tider — borta-fönstret. Kryssa i \"Kontinuerlig körning\" så används borta-tiderna plus den dagliga förbrukningen nedan av planen; avgångstiden styr när laddningen måste vara klar.",
         "data": {
           "min_soc": "Minsta batterinivå (%), planera aldrig under detta",
           "max_soc": "Maximal batterinivå (%), normal laddgräns",

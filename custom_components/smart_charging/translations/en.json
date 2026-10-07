@@ -16,7 +16,7 @@
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set battery limits, prices, the weekly 100 % boost and — when the car has regular away-times — the away-window. Tick \"Continuous usage\" and the away-times plus the daily consumption below are used by the plan; the \"from\" time is the new ready-by.",
+        "description": "Set battery limits, prices, the weekly 100 % boost and — when the car has regular away-times — the away-window. Tick \"Continuous usage\" and the away-times plus the daily consumption below are used by the plan; the departure time is the deadline for the charge to be complete.",
         "data": {
           "min_soc": "Minimum battery level (%), never plan below this",
           "max_soc": "Maximum battery level (%), normal charging target",
@@ -55,7 +55,7 @@
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set battery limits, prices, the weekly 100 % boost and — when the car has regular away-times — the away-window. Tick \"Continuous usage\" and the away-times plus the daily consumption below are used by the plan; the \"from\" time is the new ready-by.",
+        "description": "Set battery limits, prices, the weekly 100 % boost and — when the car has regular away-times — the away-window. Tick \"Continuous usage\" and the away-times plus the daily consumption below are used by the plan; the departure time is the deadline for the charge to be complete.",
         "data": {
           "min_soc": "Minimum battery level (%), never plan below this",
           "max_soc": "Maximum battery level (%), normal charging target",

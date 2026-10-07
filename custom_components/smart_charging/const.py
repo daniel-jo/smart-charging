@@ -2,7 +2,7 @@
 
 DOMAIN = "smart_charging"
 NAME = "Smart Charging"
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 PLATFORMS = ["sensor", "calendar", "select"]
 
 # --- modes ------------------------------------------------------------------
