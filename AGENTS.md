@@ -92,8 +92,12 @@ README.md
 ## Contracts you must not break
 
 - Sensor entity IDs: `sensor.smart_charging_plan` (state: human-readable plan
-  summary, attributes: `planned_sessions`, `next_action`, `mode`, …)
-  and `sensor.smart_charging_decision` (state: `resume`/`stop`/`none`).
+  summary, attributes: `planned_sessions`, `planned_hours`, `next_action`, `mode`,
+  …) and `sensor.smart_charging_decision` (state: `resume`/`stop`/`none`).
+  **Äldre installationer** (inte nyare än commit ca6b3ec, entitetsnamn "Charge
+  plan") har istället `sensor.smart_charging_charge_plan` respektive
+  `sensor.smart_charging_charge_decision` — HA behåller entity_id:et från första
+  registreringen, så namnet ändras inte vid uppgradering.
 - Select entity: `select.smart_charging_mode` with options
   `["Av", "Planläge (test)", "Live"]`.
 - Calendar entity: `calendar.smart_charging_plan` — every planned session
