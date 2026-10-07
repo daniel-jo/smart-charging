@@ -44,6 +44,7 @@ CONF_CHARGER_MAX_KW = "charger_max_kw"
 CONF_WEEKLY_FULL_CHARGE = "weekly_full_charge"
 CONF_MIN_DAYS_BETWEEN_FULL = "min_days_between_full"
 CONF_LAST_FULL_CHARGE = "last_full_charge"  # persisted ISO timestamp
+CONF_SOC_STALE_HOURS = "soc_stale_hours"  # max age (h) of a remembered SOC
 CONF_CURRENCY = "currency"
 
 # --- currency ---------------------------------------------------------------
@@ -61,6 +62,8 @@ DEFAULT_CHARGER_MAX_KW = 11.0
 DEFAULT_WEEKLY_FULL_CHARGE = False
 DEFAULT_MIN_DAYS_BETWEEN_FULL = 5.0
 DEFAULT_UPDATE_INTERVAL_MINUTES = 15
+# Max age (hours) of a remembered SOC reading before the plan refuses again.
+DEFAULT_SOC_STALE_HOURS = 12.0
 # How often the live energy sensor is sampled while charging is active.
 DEFAULT_STATS_SAMPLE_SECONDS = 60
 

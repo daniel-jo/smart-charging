@@ -45,6 +45,7 @@ from .const import (
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
     CONF_SOC_ENTITY,
+    CONF_SOC_STALE_HOURS,
     CONF_SPOT_PRICES_ENTITY,
     CONF_USAGE_AWAY_END,
     CONF_USAGE_AWAY_START,
@@ -58,6 +59,7 @@ from .const import (
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_DAYS_BETWEEN_FULL,
     DEFAULT_MIN_SOC,
+    DEFAULT_SOC_STALE_HOURS,
     DEFAULT_STATS_SAMPLE_SECONDS,
     DEFAULT_UPDATE_INTERVAL_MINUTES,
     DEFAULT_USAGE_DAYS,
@@ -148,6 +150,10 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         self._last_full_charge: Optional[datetime] = self._parse_ts(
             entry.data.get(CONF_LAST_FULL_CHARGE)
         )
+        # Last valid SOC reading (+ timestamp): keeps the plan intact while the
+        # car (and its SOC sensor) is away, until soc_stale_hours expires.
+        self._last_soc: Optional[float] = None
+        self._last_soc_at: Optional[datetime] = None
         # --- Charging statistics (simulated in Plan mode, measured in Live) ---
         # Persisted via the HA storage helper so the totals survive restarts.
         self._stats_store: Optional[Store] = Store(
@@ -323,6 +329,8 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
     async def _async_update_data(self) -> helper.Plan:
         opts = self.options
+        # Load persisted state (statistics + last SOC) before it is read below.
+        await self._ensure_stats_loaded()
 
         price_hours = self._price_hours(opts.get(CONF_SPOT_PRICES_ENTITY, ""))
         day_prices = self._day_prices(opts.get(CONF_SPOT_PRICES_ENTITY, ""))
@@ -330,7 +338,18 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         usage_tz = dt_util.get_time_zone(self.hass.config.time_zone)
         if usage_tz is None:
             usage_tz = dt_util.UTC
-        soc_now = self._soc(opts.get(CONF_SOC_ENTITY, ""))
+        soc_fresh = self._soc(opts.get(CONF_SOC_ENTITY, ""))
+        if soc_fresh is not None:
+            self._last_soc = soc_fresh
+            self._last_soc_at = self.now
+            self._save_stats()
+            soc_now: Optional[float] = soc_fresh
+            soc_source = "sensor"
+        else:
+            # No fresh reading (car away / sensor offline): fall back to the
+            # last known SOC, projected through the away-window, so the plan
+            # survives the daily commute. Never usable without any reading.
+            soc_now, soc_source = self._remembered_soc(opts, usage_tz)
         currency = str(opts.get(CONF_CURRENCY, DEFAULT_CURRENCY))
 
         plan = helper.compute_plan(
@@ -339,6 +358,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             connected=connected,
             mode=self._mode,
             soc_now=soc_now,
+            soc_source=soc_source,
             min_soc=float(opts.get(CONF_MIN_SOC, DEFAULT_MIN_SOC)),
             max_soc=float(opts.get(CONF_MAX_SOC, DEFAULT_MAX_SOC)),
             daily_consumption_pct=float(
@@ -369,8 +389,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         )
 
         # The car reports ~100 %: the week's boost has (or just) finished.
-        # Remember it so the cooldown survives restarts.
-        if soc_now is not None and soc_now >= 99.5:
+        # Remember it so the cooldown survives restarts. Fresh readings only —
+        # a remembered SOC must not re-trigger this on every recompute.
+        if soc_fresh is not None and soc_fresh >= 99.5:
             if self._last_full_charge is None or self.now - self._last_full_charge > (
                 timedelta(minutes=1)
             ):
@@ -429,7 +450,11 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
     # Charging statistics (simulated in Plan mode, measured in Live mode)
     # ------------------------------------------------------------------
     async def _ensure_stats_loaded(self) -> None:
-        """Load the persisted statistics ledgers exactly once."""
+        """Load the persisted statistics ledgers exactly once.
+
+        Also restores the last valid SOC reading (timestamped) so the plan
+        survives a restart while the car — and its SOC sensor — is away.
+        """
         if self._stats_loaded or self._stats_store is None:
             return
         self._stats_loaded = True
@@ -441,14 +466,28 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         self._stats_accrued_hours = set(data.get("accrued_hours") or [])
         partial = data.get("partial_hours")
         self._stats_partial = partial if isinstance(partial, dict) else {}
+        last_soc = data.get("last_soc")
+        if isinstance(last_soc, (int, float)) and 0 <= last_soc <= 100:
+            self._last_soc = float(last_soc)
+            self._last_soc_at = self._parse_ts(data.get("last_soc_at"))
 
     def _stats_snapshot(self) -> dict:
-        """Serialise the statistics state for the HA storage helper."""
+        """Serialise the statistics state for the HA storage helper.
+
+        Carries the last valid SOC reading (timestamped) along with the
+        ledgers — the away-projection needs it across restarts.
+        """
         return {
             MODE_PLAN: helper.stats_to_dict(self._stats[MODE_PLAN]),
             MODE_LIVE: helper.stats_to_dict(self._stats[MODE_LIVE]),
             "accrued_hours": sorted(self._stats_accrued_hours),
             "partial_hours": self._stats_partial,
+            "last_soc": self._last_soc,
+            "last_soc_at": (
+                dt_util.as_utc(self._last_soc_at).isoformat()
+                if self._last_soc_at is not None
+                else None
+            ),
         }
 
     def _save_stats(self) -> None:
@@ -745,6 +784,48 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         if value < 0 or value > 100:
             return None
         return value
+
+    def _remembered_soc(
+        self, opts: dict, usage_tz: Any
+    ) -> tuple[Optional[float], str]:
+        """Last known SOC, projected forward — or ``(None, "none")``.
+
+        Used when the sensor has no fresh reading (the car is away): returns
+        the last valid reading if it is younger than ``soc_stale_hours``,
+        projected through the away-window (same drain model as the plan).
+        The source is ``"remembered"`` when nothing was drained, else
+        ``"projected"``.
+        """
+        if self._last_soc is None or self._last_soc_at is None:
+            return None, "none"
+        age_h = (self.now - self._last_soc_at).total_seconds() / 3600.0
+        if age_h < 0:
+            return None, "none"
+        stale_h = _as_float(
+            opts.get(CONF_SOC_STALE_HOURS, DEFAULT_SOC_STALE_HOURS),
+            DEFAULT_SOC_STALE_HOURS,
+        )
+        if stale_h <= 0 or age_h > stale_h:
+            return None, "none"
+        projected = helper.project_soc(
+            self._last_soc,
+            self._last_soc_at,
+            self.now,
+            usage_enabled=_to_bool(
+                opts.get(CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED),
+                DEFAULT_USAGE_ENABLED,
+            ),
+            usage_days=str(opts.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS)),
+            usage_away_start=str(opts.get(CONF_USAGE_AWAY_START, "")),
+            usage_away_end=str(opts.get(CONF_USAGE_AWAY_END, "")),
+            daily_consumption_pct=_as_float(
+                opts.get(CONF_DAILY_CONSUMPTION_PCT, DEFAULT_DAILY_CONSUMPTION_PCT),
+                DEFAULT_DAILY_CONSUMPTION_PCT,
+            ),
+            usage_timezone=usage_tz,
+        )
+        source = "remembered" if projected >= self._last_soc - 1e-9 else "projected"
+        return projected, source
 
     @staticmethod
     def _parse_ts(value: Any) -> Optional[datetime]:

@@ -29,7 +29,8 @@
           "usage_days": "Applies to",
           "usage_away_start": "Usually away from",
           "usage_away_end": "Usually away until",
-          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute"
+          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute",
+          "soc_stale_hours": "Use the last known battery level for up to (hours) when the car reports no SOC"
         }
       }
     },
@@ -68,7 +69,8 @@
           "usage_days": "Applies to",
           "usage_away_start": "Usually away from",
           "usage_away_end": "Usually away until",
-          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute"
+          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute",
+          "soc_stale_hours": "Use the last known battery level for up to (hours) when the car reports no SOC"
         }
       }
     },

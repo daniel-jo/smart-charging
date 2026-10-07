@@ -37,6 +37,7 @@ from .const import (
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
     CONF_SOC_ENTITY,
+    CONF_SOC_STALE_HOURS,
     CONF_SPOT_PRICES_ENTITY,
     CONF_USAGE_AWAY_END,
     CONF_USAGE_AWAY_START,
@@ -51,6 +52,7 @@ from .const import (
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_DAYS_BETWEEN_FULL,
     DEFAULT_MIN_SOC,
+    DEFAULT_SOC_STALE_HOURS,
     DEFAULT_USAGE_DAYS,
     DEFAULT_USAGE_ENABLED,
     DEFAULT_WEEKLY_FULL_CHARGE,
@@ -236,6 +238,14 @@ def _params_schema(current: dict[str, Any]) -> vol.Schema:
             ): selector.selector(
                 {"number": {"mode": "box", "min": 0, "max": 100, "step": 1}}
             ),
+            vol.Required(
+                CONF_SOC_STALE_HOURS,
+                default=_as_float(
+                    current.get(CONF_SOC_STALE_HOURS), DEFAULT_SOC_STALE_HOURS
+                ),
+            ): selector.selector(
+                {"number": {"mode": "box", "min": 1, "max": 168, "step": 1}}
+            ),
         }
     )
 
@@ -383,6 +393,9 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
                     ),
                     CONF_CHARGER_MAX_KW: entry_data.get(
                         CONF_CHARGER_MAX_KW, DEFAULT_CHARGER_MAX_KW
+                    ),
+                    CONF_SOC_STALE_HOURS: entry_data.get(
+                        CONF_SOC_STALE_HOURS, DEFAULT_SOC_STALE_HOURS
                     ),
                     CONF_WEEKLY_FULL_CHARGE: entry_data.get(
                         CONF_WEEKLY_FULL_CHARGE, DEFAULT_WEEKLY_FULL_CHARGE

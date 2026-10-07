@@ -140,6 +140,7 @@ class SmartChargingPlanSensor(CoordinatorEntity, SensorEntity):
             "currency": plan.currency,
             "updated": _iso(plan.updated),
             "soc_now": plan.soc_now,
+            "soc_source": plan.soc_source,
             "min_soc": plan.min_soc,
             "max_soc": plan.max_soc,
             "daily_consumption_pct": plan.daily_consumption_pct,

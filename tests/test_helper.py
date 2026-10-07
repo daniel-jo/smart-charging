@@ -687,6 +687,91 @@ def test_usage_summary_shows_away_until():
 
 
 # ---------------------------------------------------------------------------
+# Remembered / projected SOC (commuting gaps without a fresh sensor reading)
+# ---------------------------------------------------------------------------
+
+
+def _proj(last_soc: float, seen_h: float, now_h: float, **kw) -> float:
+    """project_soc around BASE/UTC, away 07:00-17:00 weekdays unless told."""
+    base = dict(
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:00",
+        usage_away_end="17:00",
+        daily_consumption_pct=60.0,
+        usage_timezone=UTC,
+    )
+    base.update(kw)
+    return helper.project_soc(
+        last_soc, BASE + timedelta(hours=seen_h), BASE + timedelta(hours=now_h),
+        **base,
+    )
+
+
+def test_project_soc_drains_away_gap():
+    # Plan-model drain: 60 %/day spread over (07:00-17:00 complement) 840 min;
+    # 300 away-minutes elapse -> 60 * 300/840 = 150/7 ≈ 21.43 drained.
+    assert abs(_proj(50.0, 6.0, 12.0) - (50.0 - 150.0 / 7.0)) < EPSILON
+
+
+def test_project_soc_no_drain_while_home():
+    assert abs(_proj(50.0, 18.0, 23.0) - 50.0) < EPSILON
+
+
+def test_project_soc_skips_weekend():
+    # BASE + 2 d is Saturday: no away-window applies.
+    start = BASE + timedelta(days=2, hours=6)
+    end = BASE + timedelta(days=2, hours=12)
+    got = helper.project_soc(
+        50.0, start, end,
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:00",
+        usage_away_end="17:00",
+        daily_consumption_pct=60.0,
+        usage_timezone=UTC,
+    )
+    assert abs(got - 50.0) < EPSILON
+
+
+def test_project_soc_clamps_at_zero():
+    assert _proj(5.0, 6.0, 12.0) == 0.0
+
+
+def test_project_soc_unchanged_without_window():
+    got = _proj(50.0, 6.0, 12.0, usage_enabled=False)
+    assert abs(got - 50.0) < EPSILON
+
+
+def test_project_soc_crosses_midnight_window():
+    got = _proj(
+        50.0, 20.0, 26.0,
+        usage_days="all_days",
+        usage_away_start="22:00",
+        usage_away_end="06:00",
+    )
+    # Plan-model drain: (22:00-06:00 complement) 960 min; away 22:00-02:00 =
+    # 240 min elapse -> 60 * 240/960 = 15 drained.
+    assert abs(got - 35.0) < EPSILON
+
+
+def test_remembered_soc_still_plans():
+    # A projected value (20 %) fed back as soc_now yields a real plan.
+    plan = _cp(price_hours=_day_night_prices(days=2), soc_now=20.0,
+               soc_source="projected")
+    assert plan.sessions
+    assert plan.soc_now == 20.0
+    assert plan.soc_source == "projected"
+
+
+def test_no_valid_soc_ever_still_no_soc():
+    plan = _cp(price_hours=_pts([(0, 0.5)]), soc_now=None)
+    assert plan.summary == "Ingen SOC-data"
+    assert plan.soc_source == "none"
+    assert plan.next_action.reason == "no_soc"
+
+
+# ---------------------------------------------------------------------------
 # Run standalone
 # ---------------------------------------------------------------------------
 

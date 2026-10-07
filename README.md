@@ -78,6 +78,7 @@ hacs.json                           HACS metadata
 | Applies to | `weekdays` (Mon–Fri) or `all days` — only used when Continuous usage is on |
 | Usually away from / until | The window the car is normally gone — the **from** time is the new ready-by |
 | Daily battery use (%/day) | Average daily consumption (e.g. 15); spread over the away hours only |
+| Use last known battery level (h) | Max age of a remembered SOC (default 12): the plan survives while the car reports no SOC |
 
 ### Continuous usage (optional)
 
@@ -98,6 +99,21 @@ only used while the checkbox is on:
 - On **non-applicable days** (weekends with `weekdays`) the car is home all day:
   no consumption.
 - While away, the summary reads `Borta t.o.m. HH:MM — …`.
+
+### SOC gaps (car away, sensor offline)
+
+Many car integrations report `unknown`/`unavailable` while the car is gone —
+instead of dropping the plan ("Ingen SOC-data"), the integration remembers the
+last valid SOC reading and projects it forward through the away-window (the
+same drain model as above). The plan — in **both** Plan and Live mode — stays
+intact during the daily commute. The new `soc_source` attribute on
+`sensor.smart_charging_plan` tells you where the value came from: `sensor`,
+`remembered` (unchanged) or `projected` (drained through the away-window).
+
+- The reading expires after **Use last known battery level (h)** (default 12 h);
+  with no fresh *and* no recent reading the plan still fails safe (`stop`).
+- The weekly-100 % detection and the measured Live statistics always use the
+  fresh sensor reading — only the *planning* input falls back.
 
 ## Modes
 
@@ -141,6 +157,7 @@ Tools.
   "mode": "plan",
   "currency": "SEK",
   "soc_now": 60.0,
+  "soc_source": "sensor",
   "min_soc": 20.0,
   "max_soc": 80.0,
   "daily_consumption_pct": 15.0,

@@ -100,6 +100,8 @@ class Plan:
     currency: str = "SEK"
     # Battery state the plan was built from (exposed as sensor attributes).
     soc_now: Optional[float] = None
+    # Where ``soc_now`` came from: "sensor" | "remembered" | "projected" | "none".
+    soc_source: str = "sensor"
     min_soc: float = 0.0
     max_soc: float = 100.0
     daily_consumption_pct: float = 0.0
@@ -215,6 +217,7 @@ def compute_plan(
     connected: bool,
     mode: str,
     soc_now: Optional[float],
+    soc_source: str = "sensor",
     min_soc: float,
     max_soc: float,
     daily_consumption_pct: float = 0.0,
@@ -245,7 +248,12 @@ def compute_plan(
     mode
         ``"off"``, ``"plan"`` or ``"live"``.
     soc_now
-        Current battery level in percent (0-100). ``None`` if unavailable.
+        Current battery level in percent (0-100). ``None`` if unavailable —
+        the coordinator may substitute the last known reading (projected
+        forward through the away-window) so the plan survives commuting gaps.
+    soc_source
+        Where ``soc_now`` came from: ``"sensor"`` | ``"remembered"`` |
+        ``"projected"``. Exposed as a sensor attribute for transparency.
     min_soc
         Battery floor (percent). The plan never lets the projected SOC drop
         below this — charging is forced when needed.
@@ -296,6 +304,7 @@ def compute_plan(
             updated=now,
             currency=currency,
             soc_now=soc_now,
+            soc_source=soc_source,
             min_soc=min_soc,
             max_soc=max_soc,
             daily_consumption_pct=daily_consumption_pct,
@@ -332,6 +341,7 @@ def compute_plan(
     if soc_now is None or not isfinite(soc_now):
         plan = _plan()
         plan.summary = "Ingen SOC-data"
+        plan.soc_source = "none"
         plan.next_action = NextAction(action="stop", reason="no_soc")
         return plan
 
@@ -1000,3 +1010,84 @@ def _usage_next_transition(
             if candidate > now:
                 candidates.append(candidate)
     return min(candidates) if candidates else None
+
+
+def _away_minutes_between(
+    start: datetime,
+    end: datetime,
+    tz: tzinfo,
+    usage_days: str,
+    away_start_min: int,
+    away_end_min: int,
+) -> float:
+    """Away-minutes spent in ``[start, end)`` across days and midnight.
+
+    Mirrors the away-window the forecast drain model uses (day-filtered
+    ``[away_start, away_end)``, which may cross midnight). Pure — the
+    projection of a stale SOC reading forward through a commuting gap.
+    """
+    if end <= start or away_start_min == away_end_min:
+        return 0.0
+    if away_start_min < away_end_min:
+        spans = [(away_start_min, away_end_min)]
+    else:
+        spans = [(away_start_min, 24 * 60), (0, away_end_min)]
+    local_start = start.astimezone(tz)
+    local_end = end.astimezone(tz)
+    total = 0.0
+    day = local_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    while day < local_end:
+        if _usage_day_applies(usage_days, day):
+            for a_min, b_min in spans:
+                span_start = day + timedelta(minutes=a_min)
+                span_end = day + timedelta(minutes=b_min)
+                lo = max(span_start, local_start)
+                hi = min(span_end, local_end)
+                if hi > lo:
+                    total += (hi - lo).total_seconds() / 60.0
+        day += timedelta(days=1)
+    return total
+
+
+def project_soc(
+    last_soc: float,
+    last_seen: datetime,
+    now: datetime,
+    *,
+    usage_enabled: bool = False,
+    usage_days: str = "weekdays",
+    usage_away_start: str = "",
+    usage_away_end: str = "",
+    daily_consumption_pct: float = 0.0,
+    usage_timezone: Optional[tzinfo] = None,
+) -> float:
+    """Project a stale SOC reading forward to ``now``.
+
+    Subtracts the modelled drain accrued between ``last_seen`` and ``now``
+    (the daily consumption spread over the away-minutes — the same model the
+    forecast uses). Without a usable away-window the reading is returned
+    unchanged. Clamped at 0; charging while home cannot raise the reading, so
+    the projection never exceeds ``last_soc``.
+    """
+    soc = max(0.0, last_soc)
+    if now <= last_seen or daily_consumption_pct <= 0:
+        return soc
+    away_start = _parse_time_of_day(usage_away_start)
+    away_end = _parse_time_of_day(usage_away_end)
+    if not usage_enabled or away_start is None or away_end is None:
+        return soc
+    away_start_min = away_start[0] * 60 + away_start[1]
+    away_end_min = away_end[0] * 60 + away_end[1]
+    if away_start_min == away_end_min:
+        return soc
+    tz = usage_timezone if usage_timezone is not None else timezone.utc
+    # Same divisor the forecast drain model uses (see compute_plan) — mirrored
+    # on purpose so the projected start and the forecast drain agree exactly.
+    away_minutes = (away_start_min - away_end_min) % (24 * 60)
+    if away_minutes <= 0:
+        return soc
+    drain_per_min = max(0.0, daily_consumption_pct) / away_minutes  # SOC %/min
+    elapsed = _away_minutes_between(
+        last_seen, now, tz, usage_days, away_start_min, away_end_min
+    )
+    return max(0.0, soc - drain_per_min * elapsed)

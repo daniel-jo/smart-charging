@@ -113,6 +113,13 @@ def main() -> int:
         "--mode", type=_mode, default=helper._MODE_PLAN, help="off | plan | live"
     )
     parser.add_argument("--soc", type=float, default=60.0, help="Battery level (%)")
+    parser.add_argument(
+        "--soc-age-hours",
+        type=float,
+        default=0.0,
+        help="Treat --soc as this many hours old and project it through the "
+        "away-window (preview of the remembered-SOC fallback)",
+    )
     parser.add_argument("--min-soc", type=float, default=20.0, help="Battery floor (%)")
     parser.add_argument(
         "--max-soc", type=float, default=80.0, help="Normal charge target (%)"
@@ -196,12 +203,31 @@ def main() -> int:
         usage_tz = UTC
     last_full = _parse_iso(args.last_full_charge) if args.last_full_charge else None
 
+    soc_now = args.soc
+    soc_source = "sensor"
+    if args.soc_age_hours and args.soc_age_hours > 0:
+        soc_now = helper.project_soc(
+            args.soc,
+            now - timedelta(hours=args.soc_age_hours),
+            now,
+            usage_enabled=args.usage,
+            usage_days=args.usage_days,
+            usage_away_start=args.usage_away_start,
+            usage_away_end=args.usage_away_end,
+            daily_consumption_pct=args.daily_consumption_pct,
+            usage_timezone=usage_tz,
+        )
+        soc_source = (
+            "remembered" if soc_now >= args.soc - 1e-9 else "projected"
+        )
+
     plan = helper.compute_plan(
         price_hours=price_hours,
         day_prices=day_prices,
         connected=args.connected,
         mode=args.mode,
-        soc_now=args.soc,
+        soc_now=soc_now,
+        soc_source=soc_source,
         min_soc=args.min_soc,
         max_soc=args.max_soc,
         daily_consumption_pct=args.daily_consumption_pct,
@@ -223,7 +249,7 @@ def main() -> int:
     print(f"Connected:       {'yes' if args.connected else 'no'}")
     print(f"Currency:        {args.currency}")
     print(
-        f"Battery:         {args.soc} %  (floor {args.min_soc} %, target {args.max_soc} %)"
+        f"Battery:         {soc_now:.1f} %  (floor {args.min_soc} %, target {args.max_soc} %)  [source: {soc_source}]"
     )
     print(f"Consumption:     {args.daily_consumption_pct} %/day")
     print(f"Charger max:     {args.charger_max_kw} kW on {args.capacity_kwh} kWh battery")
