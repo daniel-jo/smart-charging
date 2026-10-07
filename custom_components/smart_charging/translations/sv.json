@@ -16,28 +16,20 @@
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in batterigränser, daglig förbrukning, veckans 100 %-laddning och valutan för dina prisdata. Inga priströsklar behövs – billiga timmar härleds ur prognosen.",
+        "description": "Ställ in batterigränser, priser, veckans 100 %-laddning och — när bilen har regelbundna borta-tider — borta-fönstret. Kryssa i \"Kontinuerlig körning\" så används borta-tiderna plus den dagliga förbrukningen nedan av planen; från-tiden är den nya \"klar till\".",
         "data": {
           "min_soc": "Minsta batterinivå (%), planera aldrig under detta",
           "max_soc": "Maximal batterinivå (%), normal laddgräns",
           "battery_capacity_kwh": "Batterikapacitet (kWh)",
-          "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling",
           "charger_max_kw": "Max laddareffekt (kW)",
+          "currency": "Prisvaluta",
           "weekly_full_charge": "Ladda till 100 % ungefär en gång i veckan (billigaste fönstret)",
           "min_days_between_full": "Minsta antal dagar mellan två 100 %-laddningar",
           "usage_enabled": "Kontinuerlig körning - bilen har regelbundna borta-tider",
-          "deadline_time": "Klar till (klockslag, valfritt) - laddning klar före detta",
-          "deadline_restart_minutes": "Återstart efter passerad deadline (minuter, 0 = ingen)",
-          "currency": "Prisvaluta"
-        }
-      },
-      "usage": {
-        "title": "Kontinuerlig körning",
-        "description": "När brukar bilen vara borta? Laddning sker endast när den är hemma, och den dagliga förbrukningen används bara när den är borta.",
-        "data": {
           "usage_days": "Gäller",
           "usage_away_start": "Brukar vara borta från",
-          "usage_away_end": "Brukar vara borta till"
+          "usage_away_end": "Brukar vara borta till",
+          "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling"
         }
       }
     },
@@ -63,28 +55,20 @@
       },
       "params": {
         "title": "Laddparametrar",
-        "description": "Ställ in batterigränser, daglig förbrukning, veckans 100 %-laddning och valutan för dina prisdata. Inga priströsklar behövs – billiga timmar härleds ur prognosen.",
+        "description": "Ställ in batterigränser, priser, veckans 100 %-laddning och — när bilen har regelbundna borta-tider — borta-fönstret. Kryssa i \"Kontinuerlig körning\" så används borta-tiderna plus den dagliga förbrukningen nedan av planen; från-tiden är den nya \"klar till\".",
         "data": {
           "min_soc": "Minsta batterinivå (%), planera aldrig under detta",
           "max_soc": "Maximal batterinivå (%), normal laddgräns",
           "battery_capacity_kwh": "Batterikapacitet (kWh)",
-          "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling",
           "charger_max_kw": "Max laddareffekt (kW)",
+          "currency": "Prisvaluta",
           "weekly_full_charge": "Ladda till 100 % ungefär en gång i veckan (billigaste fönstret)",
           "min_days_between_full": "Minsta antal dagar mellan två 100 %-laddningar",
           "usage_enabled": "Kontinuerlig körning - bilen har regelbundna borta-tider",
-          "deadline_time": "Klar till (klockslag, valfritt) - laddning klar före detta",
-          "deadline_restart_minutes": "Återstart efter passerad deadline (minuter, 0 = ingen)",
-          "currency": "Prisvaluta"
-        }
-      },
-      "usage": {
-        "title": "Kontinuerlig körning",
-        "description": "När brukar bilen vara borta? Laddning sker endast när den är hemma, och den dagliga förbrukningen används bara när den är borta.",
-        "data": {
           "usage_days": "Gäller",
           "usage_away_start": "Brukar vara borta från",
-          "usage_away_end": "Brukar vara borta till"
+          "usage_away_end": "Brukar vara borta till",
+          "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling"
         }
       }
     },

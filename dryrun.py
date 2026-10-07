@@ -136,19 +136,6 @@ def main() -> int:
         "--last-full-charge", type=str, default="", help="ISO time of last 100 % charge"
     )
     parser.add_argument("--currency", type=str, default="SEK")
-    parser.add_argument("--deadline", type=str, default="", help="Deadline ISO datetime")
-    parser.add_argument(
-        "--deadline-time",
-        type=str,
-        default="",
-        help="Recurring 'HH:MM' deadline (interpreted in --timezone)",
-    )
-    parser.add_argument(
-        "--deadline-restart-min",
-        type=float,
-        default=0.0,
-        help="Minutes after a passed deadline before charging may restart (0 = never)",
-    )
     parser.add_argument(
         "--usage", action="store_true", help="Enable continuous usage (away-window)"
     )
@@ -174,7 +161,7 @@ def main() -> int:
         "--timezone",
         type=str,
         default="UTC",
-        help="IANA timezone for the deadline (default: UTC)",
+        help="IANA timezone for the away-window (default: UTC)",
     )
     parser.add_argument(
         "--connected",
@@ -203,11 +190,10 @@ def main() -> int:
     )
 
     now = _parse_iso(args.now) if args.now else datetime.now(UTC)
-    deadline = _parse_iso(args.deadline) if args.deadline else None
     try:
-        deadline_tz = ZoneInfo(args.timezone)
+        usage_tz = ZoneInfo(args.timezone)
     except Exception:
-        deadline_tz = UTC
+        usage_tz = UTC
     last_full = _parse_iso(args.last_full_charge) if args.last_full_charge else None
 
     plan = helper.compute_plan(
@@ -228,10 +214,7 @@ def main() -> int:
         usage_days=args.usage_days,
         usage_away_start=args.usage_away_start,
         usage_away_end=args.usage_away_end,
-        deadline=deadline,
-        deadline_time=args.deadline_time or None,
-        deadline_restart_minutes=args.deadline_restart_min,
-        deadline_timezone=deadline_tz,
+        usage_timezone=usage_tz,
         now=now,
         currency=args.currency,
     )
@@ -250,13 +233,6 @@ def main() -> int:
     )
     if last_full:
         print(f"Last full:       {last_full.isoformat()}")
-    if deadline:
-        print(f"Deadline:        {deadline.isoformat()}")
-    if args.deadline_time:
-        print(
-            f"Deadline time:   {args.deadline_time} "
-            f"(tz {args.timezone}, restart {args.deadline_restart_min} min)"
-        )
     if args.usage:
         print(
             f"Continuous usage: {args.usage_days}, away "

@@ -25,10 +25,6 @@ CONF_CHARGER_RESUME_BUTTON = "charger_resume_button_entity"
 CONF_CHARGER_STOP_BUTTON = "charger_stop_button_entity"
 CONF_CHARGER_MODE_SENSOR = "charger_mode_sensor_entity"
 CONF_CHARGER_ENERGY_SENSOR = "charger_energy_sensor_entity"
-CONF_DEADLINE_ENTITY = "deadline_entity"  # legacy — only its clock time is used
-CONF_DEADLINE_TIME = "deadline_time"
-CONF_DEADLINE_RESTART_MINUTES = "deadline_restart_minutes"
-
 # --- usage (continuous usage / away-window) -------------------------------------
 CONF_USAGE_ENABLED = "usage_enabled"
 CONF_USAGE_DAYS = "usage_days"
@@ -67,8 +63,6 @@ DEFAULT_MIN_DAYS_BETWEEN_FULL = 5.0
 DEFAULT_UPDATE_INTERVAL_MINUTES = 15
 # How often the live energy sensor is sampled while charging is active.
 DEFAULT_STATS_SAMPLE_SECONDS = 60
-# 0 = never restart charging after a passed deadline.
-DEFAULT_DEADLINE_RESTART_MINUTES = 0.0
 
 # --- charger_mode sensor states that mean "connected" -----------------------
 # The zaptec sensor.*_charger_mode uses the native Zaptec values in lower

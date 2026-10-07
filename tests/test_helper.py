@@ -72,7 +72,6 @@ def _cp(**kw) -> helper.Plan:
         weekly_full_charge=False,
         last_full_charge=None,
         min_days_between_full=5.0,
-        deadline=None,
         now=_now(0),
         currency="SEK",
     )
@@ -148,101 +147,10 @@ def test_min_soc_above_max_soc_returns_config_error():
     assert plan.summary == "Felaktig konfiguration"
 
 
-def test_deadline_past():
-    plan = _cp(price_hours=_pts([(10, 0.5)]), deadline=_now(9), now=_now(10))
-    assert plan.summary == "Deadline passerad"
-    assert plan.next_action.reason == "deadline"
-
-
-# ---------------------------------------------------------------------------
-# Recurring time-of-day deadline (minute precise)
-# ---------------------------------------------------------------------------
-
-
-def test_deadline_time_session_ends_exact_minute():
-    """A 05:45 deadline cuts the 05:00-06:00 hour short — session ends at 05:45."""
-    plan = _cp(
-        price_hours=_pts([(h, 0.5) for h in range(0, 8)]),  # 00:00-08:00 cheap
-        soc_now=15.0,
-        max_soc=100.0,
-        deadline_time="05:45",
-        now=_now(0),
-    )
-    assert plan.sessions
-    last = plan.sessions[-1]
-    assert last.end == BASE + timedelta(hours=5, minutes=45)
-    assert abs(last.hours[-1]["duration_hours"] - 0.75) < EPSILON
-    assert all(h["duration_hours"] == 1.0 for h in last.hours[:-1])
-
-
-def test_no_deadline_unconstrained():
+def test_unconstrained_plans_without_window():
     plan = _cp(price_hours=_day_night_prices(days=2))
-    assert plan.deadline_next is None
-    assert plan.deadline_restart_at is None
-    assert plan.deadline_time is None
+    assert plan.usage_next is None
     assert plan.sessions
-
-
-def test_deadline_time_passed_no_restart():
-    """Deadline already passed today and no restart minutes: plan stays stopped."""
-    plan = _cp(
-        price_hours=_day_night_prices(days=2),
-        deadline_time="05:45",
-        deadline_restart_minutes=0,
-        now=_now(7),
-    )
-    assert plan.summary == "Deadline passerad"
-    assert plan.sessions == []
-    assert plan.next_action.action == "stop"
-    assert plan.next_action.reason == "deadline"
-    assert plan.deadline_restart_at is None
-
-
-def test_deadline_time_blocked_then_rearm():
-    """05:45 + 60 min: blocked until 06:45, then the plan targets tomorrow."""
-    blocked = _cp(
-        price_hours=_day_night_prices(days=3),
-        deadline_time="05:45",
-        deadline_restart_minutes=60,
-        now=BASE.replace(hour=5, minute=50),
-    )
-    assert blocked.summary == "Deadline passerad"
-    assert blocked.sessions == []
-    assert blocked.deadline_restart_at == BASE.replace(hour=6, minute=45)
-
-    # 06:46 — re-armed: the plan may charge again, but must end by tomorrow 05:45.
-    rearmed = _cp(
-        price_hours=_day_night_prices(days=3),
-        deadline_time="05:45",
-        deadline_restart_minutes=60,
-        soc_now=30.0,
-        now=BASE.replace(hour=6, minute=46),
-    )
-    assert rearmed.summary != "Deadline passerad"
-    assert rearmed.sessions
-    tomorrow = (BASE + timedelta(days=1)).replace(hour=5, minute=45)
-    assert rearmed.deadline_next == tomorrow
-    assert max(s.end for s in rearmed.sessions) <= tomorrow
-    # Charging is scheduled again *today* (the 22:00 cheap night window).
-    assert any(s.start >= BASE.replace(hour=12) for s in rearmed.sessions)
-
-
-def test_deadline_time_fresh_cycle_next_day():
-    """No restart (0 min): a passed deadline blocks the rest of the day, but the
-    next day's pre-deadline window is planned normally."""
-    plan = _cp(
-        price_hours=_day_night_prices(days=3),
-        deadline_time="05:45",
-        deadline_restart_minutes=0,
-        soc_now=30.0,
-        now=(BASE + timedelta(days=1)).replace(hour=3),
-    )
-    assert plan.summary != "Deadline passerad"
-    assert plan.deadline_next == (BASE + timedelta(days=1)).replace(hour=5, minute=45)
-    assert plan.sessions
-    assert max(s.end for s in plan.sessions) <= (BASE + timedelta(days=1)).replace(
-        hour=5, minute=45
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -645,8 +553,8 @@ def test_accrue_plan_hours_ongoing_minute_precise():
     assert helper.hour_key(BASE + timedelta(hours=5)) in accrued
 
 
-def test_accrue_plan_hours_deadline_cut_hour():
-    """A deadline-cut hour (duration < 1) accrues only the cut portion."""
+def test_accrue_plan_hours_cut_hour():
+    """A cut hour (duration < 1) accrues only the cut portion."""
     stats = helper.ChargingStats()
     accrued = set()
     partial = {}

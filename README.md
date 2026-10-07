@@ -70,38 +70,21 @@ hacs.json                           HACS metadata
 | Minimum battery level (%) | Floor — never plan below this |
 | Maximum battery level (%) | Normal charging target (e.g. 80) |
 | Battery capacity (kWh) | Needed to convert kW→% (e.g. 77) |
-| Daily battery use (%/day) | Average daily consumption (e.g. 15) |
 | Max charger power (kW) | e.g. 11 |
+| Price currency | Labels the prices; nothing is converted |
 | Charge to 100 % weekly | Enable the cheapest-window boost |
 | Min. days between 100 % charges | Cooldown, default 5 |
-| Price currency | Labels the prices; nothing is converted |
-| Ready by (time, optional) | Daily deadline — charging is complete *before* this, minute precise |
-| Restart after deadline (min, 0 = never) | After the deadline passes, wait this long before charging may start again |
-| Continuous usage (checkbox) | Regular away-times replace the deadline: the car charges only while home |
-
-### Deadline (optional)
-
-- **"Ready by"** is a clock time (HA's local timezone), **not a date** — it
-  recurs every day and only the time matters.
-- While the deadline is in the future, the plan schedules charging so it is
-  **complete before** that time — **minute precise**: the hour that contains
-  the deadline is cut short, so a 05:45 deadline ends charging at 05:45 (not
-  06:00).
-- Once the deadline passes, charging stops (`"Deadline passerad"`). It may
-  start again only after **"Restart after deadline"** minutes (e.g. `60` → a
-  05:45 deadline re-arms at 06:45) — and then only if the plan wants it,
-  targeting the *next* day's deadline. With `0`/empty (default) charging does
-  **not** restart that day; the next day's pre-deadline window is planned
-  normally.
-- Leaving the time empty disables the deadline entirely.
-- Backwards compatibility: an old deadline `input_datetime` from the previous
-  UI is still honoured for its clock time (the date is ignored). The picker has
-  moved from the *entities* step into *parameters*.
+| Continuous usage (checkbox) | The car has regular away-times — see below |
+| Applies to | `weekdays` (Mon–Fri) or `all days` — only used when Continuous usage is on |
+| Usually away from / until | The window the car is normally gone — the **from** time is the new ready-by |
+| Daily battery use (%/day) | Average daily consumption (e.g. 15); spread over the away hours only |
 
 ### Continuous usage (optional)
 
-Ticking **"Continuous usage"** (`Kontinuerlig körning`) replaces the
-`ready by` / `restart after deadline` model with your weekly rhythm:
+Ticking **"Continuous usage"** (`Kontinuerlig körning`) replaces the daily
+ready-by model with your weekly rhythm. All fields live on the **same
+parameters page** (no extra step) — the away-fields are only required and
+only used while the checkbox is on:
 
 - **Applies to** — `weekdays` (Mon–Fri) or `all days`.
 - **Usually away from / until** — the window the car is normally gone.
@@ -113,9 +96,8 @@ Ticking **"Continuous usage"** (`Kontinuerlig körning`) replaces the
 - **The daily consumption is used only while the car is away** — parked at home
   the battery stays put, so `daily battery use` is spread over the away hours.
 - On **non-applicable days** (weekends with `weekdays`) the car is home all day:
-  no deadline and no consumption.
+  no consumption.
 - While away, the summary reads `Borta t.o.m. HH:MM — …`.
-- `ready by` / `restart after deadline` are ignored when the checkbox is on.
 
 ## Modes
 
@@ -167,9 +149,11 @@ Tools.
   "boost_scheduled": true,
   "last_full_charge": "...",
   "next_boost_after": "...",
-  "deadline_time": "05:45",
-  "deadline_next": "...",
-  "deadline_restart_at": "...",
+  "usage_enabled": true,
+  "usage_days": "weekdays",
+  "usage_away_start": "07:00",
+  "usage_away_end": "17:00",
+  "usage_next": "...",
   "day_prices": [{"date": "2026-09-17", "min_kwh": 0.5, "max_kwh": 1.3, "avg_kwh": 0.9}],
   "updated": "..."
 }

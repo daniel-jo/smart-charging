@@ -55,7 +55,7 @@ class PriceHour:
 
     start: datetime
     price_kwh: float
-    duration_hours: float = 1.0  # < 1.0 when a deadline cuts the hour short
+    duration_hours: float = 1.0  # < 1.0 when an away-window cut shortens the hour
 
 
 @dataclass(frozen=True)
@@ -112,13 +112,8 @@ class Plan:
     next_boost_after: Optional[datetime] = None
     # Per-day price stats for display (best-effort from `days` attribute).
     day_prices: list[DayPrice] = field(default_factory=list)
-    # Recurring time-of-day deadline (informative; resolution happens in
-    # ``compute_plan``).
-    deadline_time: Optional[str] = None
-    deadline_next: Optional[datetime] = None
-    deadline_restart_at: Optional[datetime] = None
     # Continuous usage ("away-window") model — when enabled, replaces the
-    # deadline / restart settings: the car is away on the configured days in the
+    # The car is away on the configured days in the
     # ``usage_away_start`` → ``usage_away_end`` window and drains only then.
     usage_enabled: bool = False
     usage_days: str = "weekdays"
@@ -213,24 +208,6 @@ def _parse_time_of_day(value: Optional[str]) -> Optional[tuple[int, int]]:
     return (hour, minute)
 
 
-def _truncate_at_deadline(
-    hours: list[PriceHour], deadline: datetime
-) -> list[PriceHour]:
-    """Keep hours that start before ``deadline``; the containing hour is cut short."""
-    out: list[PriceHour] = []
-    for h in hours:
-        if h.start >= deadline:
-            continue
-        end = h.start + timedelta(hours=1)
-        if end <= deadline:
-            out.append(h)
-            continue
-        duration = (deadline - h.start).total_seconds() / 3600.0
-        if duration > 0:
-            out.append(PriceHour(h.start, h.price_kwh, duration_hours=duration))
-    return out
-
-
 def compute_plan(
     *,
     price_hours: list[PriceHour],
@@ -251,10 +228,7 @@ def compute_plan(
     usage_days: str = "weekdays",  # "weekdays" | "all_days"
     usage_away_start: str = "",  # "HH:MM" — car leaves (the new "ready by")
     usage_away_end: str = "",  # "HH:MM" — car returns
-    deadline: Optional[datetime] = None,
-    deadline_time: Optional[str] = None,
-    deadline_restart_minutes: float = 0.0,
-    deadline_timezone: Optional[tzinfo] = None,
+    usage_timezone: Optional[tzinfo] = None,
     now: datetime,
     currency: str = "SEK",
 ) -> Plan:
@@ -290,34 +264,22 @@ def compute_plan(
     min_days_between_full
         Minimum days between two 100 % charges.
     usage_enabled
-        When ``True``, the plan uses the "continuous usage"/away-window model
-        instead of the legacy deadline settings: on the selected days
-        (``usage_days``) the car is *away* between ``usage_away_start`` and
-        ``usage_away_end``. It can only charge while home (``usage_away_end`` →
-        ``usage_away_start``) and drains the battery only while away.
-        ``usage_away_start`` acts as the "ready by" — charging must be complete
-        before it. ``daily_consumption_pct`` is spread over the away hours.
+        When ``True``, the plan uses the "continuous usage"/away-window model:
+        on the selected days (``usage_days``) the car is *away* between
+        ``usage_away_start`` and ``usage_away_end``. It can only charge while
+        home (``usage_away_end`` → ``usage_away_start``) and drains the battery
+        only while away. ``usage_away_start`` acts as the "ready by" —
+        charging must be complete before it. ``daily_consumption_pct`` is
+        spread over the away hours.
     usage_days
         ``"weekdays"`` (default) — the away-window applies Mon–Fri only; on
-        weekends the car is home all day (no deadline, no drain). ``"all_days"``
+        weekends the car is home all day (no drain). ``"all_days"``
         — the window applies every day.
     usage_away_start / usage_away_end
         Times of day (``"HH:MM"``) when the car leaves and returns, interpreted
-        in ``deadline_timezone``. ``usage_away_start`` is the new "ready by".
-    deadline
-        Optional legacy absolute deadline datetime — no charging planned at or
-        after it (kept for backward compatibility).
-    deadline_time
-        Optional recurring time-of-day ``"HH:MM"`` (interpreted in
-        ``deadline_timezone``). Charging is planned so it is *complete* before
-        this time each day — minute precise: the hour that contains the
-        deadline is cut short.
-    deadline_restart_minutes
-        Minutes to wait after a passed deadline before the plan may be
-        recomputed against the *next* day's deadline. ``0`` (default) — after
-        the deadline has passed, charging must not start again that day.
-    deadline_timezone
-        Timezone the recurring deadline is interpreted in (defaults to UTC).
+        in ``usage_timezone``. ``usage_away_start`` is the new "ready by".
+    usage_timezone
+        Timezone the away-window is interpreted in (defaults to UTC).
     now
         Current time (timezone-aware).
     currency
@@ -339,7 +301,6 @@ def compute_plan(
             daily_consumption_pct=daily_consumption_pct,
             last_full_charge=last_full_charge,
             day_prices=list(day_prices) if day_prices else [],
-            deadline_time=deadline_time or None,
             usage_enabled=usage_enabled,
             usage_days=usage_days,
             usage_away_start=usage_away_start if usage_enabled else "",
@@ -403,53 +364,7 @@ def compute_plan(
         plan.next_action = NextAction(action="stop", reason="no_data")
         return plan
 
-    # --- Deadline -------------------------------------------------------------
-    # Two modes:
-    #  * ``deadline`` (legacy) — an absolute datetime; everything at/after it
-    #    is cut.
-    #  * ``deadline_time`` — a recurring time-of-day, minute precise. Once the
-    #    deadline passes, charging is blocked; after ``deadline_restart_minutes``
-    #    (``0`` = never) it re-arms and the plan runs against the *next* day's
-    #    deadline.
-    eff_deadline: Optional[datetime] = None
-    tod = None if usage_enabled else _parse_time_of_day(deadline_time)
-    if tod is not None:
-        tz = deadline_timezone if deadline_timezone is not None else timezone.utc
-        local_now = now.astimezone(tz)
-        today_dl = local_now.replace(
-            hour=tod[0], minute=tod[1], second=0, microsecond=0
-        )
-        if today_dl > now:
-            eff_deadline = today_dl
-        else:
-            restart_min = max(0.0, float(deadline_restart_minutes))
-            rearm_at = today_dl + timedelta(minutes=restart_min)
-            if restart_min > 0 and now >= rearm_at:
-                eff_deadline = today_dl + timedelta(days=1)
-            else:
-                plan = _plan()
-                plan.deadline_restart_at = rearm_at if restart_min > 0 else None
-                plan.summary = "Deadline passerad"
-                plan.next_action = NextAction(
-                    action="stop", at=now_hour, reason="deadline"
-                )
-                return plan
-    elif deadline is not None and not usage_enabled:
-        eff_deadline = deadline
-
-    if eff_deadline is not None:
-        if tod is not None:
-            future = _truncate_at_deadline(future, eff_deadline)
-        else:
-            future = [h for h in future if h.start < eff_deadline]
-        if not future:
-            plan = _plan()
-            plan.summary = "Deadline passerad"
-            plan.next_action = NextAction(action="stop", at=now_hour, reason="deadline")
-            return plan
-
     plan = _plan()
-    plan.deadline_next = eff_deadline
     n = len(future)
 
     # --- Away-window availability & drain profile ("continuous usage") --------
@@ -457,7 +372,7 @@ def compute_plan(
     # usage_away_start on the selected days) and drains only while away, so the
     # constant per-hour drain (pct_cons_h) is replaced by a per-hour profile.
     # When disabled the profile degenerates to the legacy behaviour: every hour
-    # chargeable at its full (possibly deadline-cut) duration, uniform drain.
+    # chargeable at its full duration, uniform drain.
     usage_next: Optional[datetime] = None
     away_start_min = away_end_min = 0
     away_minutes = 0
@@ -468,13 +383,13 @@ def compute_plan(
             away_start_min = away_start_hm[0] * 60 + away_start_hm[1]
             away_end_min = away_end_hm[0] * 60 + away_end_hm[1]
             away_minutes = (away_start_min - away_end_min) % (24 * 60)
-            tz = deadline_timezone if deadline_timezone is not None else timezone.utc
+            tz = usage_timezone if usage_timezone is not None else timezone.utc
             usage_next = _usage_next_transition(
                 now, tz, usage_days, away_start_min, away_end_min
             )
 
     if usage_enabled and away_minutes > 0:
-        tz = deadline_timezone if deadline_timezone is not None else timezone.utc
+        tz = usage_timezone if usage_timezone is not None else timezone.utc
         drain_per_min = max(0.0, daily_consumption_pct) / away_minutes  # SOC %/min
         charge_frac = [0.0] * n
         drain = [0.0] * n
@@ -519,7 +434,7 @@ def compute_plan(
             if est >= 100.0:
                 continue
             # Smallest window whose *accumulated chargeable duration* reaches
-            # 100 % (the final hour may be partial on a deadline/away cut).
+            # 100 % (the final hour may be partial on an away-window cut).
             need = 100.0 - est
             j = i
             acc = 0.0
@@ -562,7 +477,7 @@ def compute_plan(
     selected_frac: list[float] = []
 
     def _charge_hour(hour: PriceHour, session_cap: float, frac: float) -> None:
-        """Append one charging hour (partial on a deadline/away cut)."""
+        """Append one charging hour (partial on an away-window cut)."""
         nonlocal soc
         soc = min(session_cap, soc + rate * frac)
         selected.append(hour)
@@ -669,8 +584,8 @@ def compute_plan(
         plan.summary = _build_summary(sessions, currency)
         first = sessions[0]
         last = sessions[-1]
-        # Minute-precise: a session may end at an arbitrary minute (deadline
-        # cut or SOC cap), so compare against ``now``, not the floored hour.
+        # Minute-precise: a session may end at an arbitrary minute
+        # (away-window cut or SOC cap), so compare against ``now``, not the floored hour.
         if first.start <= now < first.end:
             plan.next_action = NextAction(
                 action="none",
@@ -689,7 +604,7 @@ def compute_plan(
 
     # Continuous usage: when the car is currently away, tell when it returns.
     if usage_enabled and away_minutes > 0:
-        tz = deadline_timezone if deadline_timezone is not None else timezone.utc
+        tz = usage_timezone if usage_timezone is not None else timezone.utc
         if _usage_is_away(now, tz, usage_days, away_start_min, away_end_min):
             until = usage_next.strftime("%H:%M") if usage_next is not None else ""
             prefix = f"Borta t.o.m. {until}" if until else "Borta"

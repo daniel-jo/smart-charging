@@ -1,7 +1,7 @@
 """Coordinator for the Smart Charging integration.
 
 Event-driven: listens to state changes on the configured input entities
-(spot prices forecast, charger mode, deadline, mode select) plus a periodic
+(spot prices forecast, charger mode, mode select) plus a periodic
 tick, throttles recomputes, and updates the plan. In Live mode it calls the
 charger switch/button services when the desired next action changes.
 
@@ -15,7 +15,6 @@ measurement).
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -41,9 +40,6 @@ from .const import (
     CONF_CHARGER_STOP_BUTTON,
     CONF_CURRENCY,
     CONF_DAILY_CONSUMPTION_PCT,
-    CONF_DEADLINE_ENTITY,
-    CONF_DEADLINE_RESTART_MINUTES,
-    CONF_DEADLINE_TIME,
     CONF_LAST_FULL_CHARGE,
     CONF_MAX_SOC,
     CONF_MIN_DAYS_BETWEEN_FULL,
@@ -59,7 +55,6 @@ from .const import (
     DEFAULT_CHARGER_MAX_KW,
     DEFAULT_CURRENCY,
     DEFAULT_DAILY_CONSUMPTION_PCT,
-    DEFAULT_DEADLINE_RESTART_MINUTES,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_DAYS_BETWEEN_FULL,
     DEFAULT_MIN_SOC,
@@ -109,11 +104,6 @@ def resolve_options(entry: ConfigEntry) -> dict:
         CONF_CHARGER_STOP_BUTTON: entry.data.get(CONF_CHARGER_STOP_BUTTON, ""),
         CONF_CHARGER_MODE_SENSOR: entry.data.get(CONF_CHARGER_MODE_SENSOR, ""),
         CONF_CHARGER_ENERGY_SENSOR: entry.data.get(CONF_CHARGER_ENERGY_SENSOR, ""),
-        CONF_DEADLINE_ENTITY: entry.data.get(CONF_DEADLINE_ENTITY, ""),
-        CONF_DEADLINE_TIME: entry.data.get(CONF_DEADLINE_TIME, ""),
-        CONF_DEADLINE_RESTART_MINUTES: entry.data.get(
-            CONF_DEADLINE_RESTART_MINUTES, DEFAULT_DEADLINE_RESTART_MINUTES
-        ),
         CONF_USAGE_ENABLED: entry.data.get(CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED),
         CONF_USAGE_DAYS: entry.data.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS),
         CONF_USAGE_AWAY_START: entry.data.get(CONF_USAGE_AWAY_START, ""),
@@ -154,7 +144,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         self._last_action_signature: Optional[str] = None
         self._last_summary: Optional[str] = None
         self._mode: str = str(entry.data.get("mode", MODE_PLAN))
-        self._deadline_timer: Optional[CALLBACK_TYPE] = None
+        self._boundary_timer: Optional[CALLBACK_TYPE] = None
         self._last_full_charge: Optional[datetime] = self._parse_ts(
             entry.data.get(CONF_LAST_FULL_CHARGE)
         )
@@ -264,9 +254,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         if self._hass_start_unsub is not None:
             self._hass_start_unsub()
             self._hass_start_unsub = None
-        if self._deadline_timer is not None:
-            self._deadline_timer()
-            self._deadline_timer = None
+        if self._boundary_timer is not None:
+            self._boundary_timer()
+            self._boundary_timer = None
         self._close_live_window()
         if self._service_unsub is not None:
             self._service_unsub()
@@ -300,16 +290,12 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         """Recompute when one of the watched entities changes."""
         await self.async_request_refresh()
 
-    def _schedule_deadline_timer(self, plan: helper.Plan) -> None:
-        """Wake at the next deadline boundary so stop/rearm happen on the minute."""
-        if self._deadline_timer is not None:
-            self._deadline_timer()
-            self._deadline_timer = None
+    def _schedule_boundary_timer(self, plan: helper.Plan) -> None:
+        """Wake at the next away-window boundary so the plan flips on the minute."""
+        if self._boundary_timer is not None:
+            self._boundary_timer()
+            self._boundary_timer = None
         instants = []
-        if plan.deadline_restart_at is not None:
-            instants.append(plan.deadline_restart_at)
-        if plan.deadline_next is not None:
-            instants.append(plan.deadline_next)
         if plan.usage_next is not None:
             instants.append(plan.usage_next)
         future_instants = [
@@ -320,13 +306,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         if not future_instants:
             return
         when = min(future_instants)
-        self._deadline_timer = ha_event.async_track_point_in_utc_time(
-            self.hass, self._on_deadline_boundary, when
+        self._boundary_timer = ha_event.async_track_point_in_utc_time(
+            self.hass, self._on_boundary, when
         )
 
-    async def _on_deadline_boundary(self, _point_in_time: Any) -> None:
-        """A deadline boundary passed — recompute so the plan flips state."""
-        self._deadline_timer = None
+    async def _on_boundary(self, _point_in_time: Any) -> None:
+        """An away-window boundary passed — recompute so the plan flips state."""
+        self._boundary_timer = None
         await self.async_request_refresh()
 
     async def async_shutdown(self) -> None:
@@ -341,14 +327,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         price_hours = self._price_hours(opts.get(CONF_SPOT_PRICES_ENTITY, ""))
         day_prices = self._day_prices(opts.get(CONF_SPOT_PRICES_ENTITY, ""))
         connected = self._is_connected(opts.get(CONF_CHARGER_MODE_SENSOR, ""))
-        deadline_time = self._deadline_time(opts)
-        deadline_restart_minutes = _as_float(
-            opts.get(CONF_DEADLINE_RESTART_MINUTES, DEFAULT_DEADLINE_RESTART_MINUTES),
-            0.0,
-        )
-        deadline_tz = dt_util.get_time_zone(self.hass.config.time_zone)
-        if deadline_tz is None:
-            deadline_tz = dt_util.UTC
+        usage_tz = dt_util.get_time_zone(self.hass.config.time_zone)
+        if usage_tz is None:
+            usage_tz = dt_util.UTC
         soc_now = self._soc(opts.get(CONF_SOC_ENTITY, ""))
         currency = str(opts.get(CONF_CURRENCY, DEFAULT_CURRENCY))
 
@@ -382,9 +363,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             usage_days=str(opts.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS)),
             usage_away_start=str(opts.get(CONF_USAGE_AWAY_START, "")),
             usage_away_end=str(opts.get(CONF_USAGE_AWAY_END, "")),
-            deadline_time=deadline_time,
-            deadline_restart_minutes=deadline_restart_minutes,
-            deadline_timezone=deadline_tz,
+            usage_timezone=usage_tz,
             now=self.now,
             currency=currency,
         )
@@ -403,7 +382,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             self._last_summary = plan.summary
 
         await self._maybe_act(plan)
-        self._schedule_deadline_timer(plan)
+        self._schedule_boundary_timer(plan)
 
         # Remember the forecast for the off-recompute live sampling loop, then
         # accrue statistics for the active mode.
@@ -438,7 +417,6 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             opts.get(CONF_SPOT_PRICES_ENTITY, ""),
             opts.get(CONF_SOC_ENTITY, ""),
             opts.get(CONF_CHARGER_MODE_SENSOR, ""),
-            opts.get(CONF_DEADLINE_ENTITY, ""),
             opts.get(CONF_CHARGER_OPERATION_MODE, ""),
             opts.get(CONF_CHARGER_RESUME_BUTTON, ""),
             opts.get(CONF_CHARGER_STOP_BUTTON, ""),
@@ -745,38 +723,6 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         if state is None:
             return True
         return state.state in CHARGER_CONNECTED_STATES
-
-    def _deadline_time(self, opts: dict) -> Optional[str]:
-        """The time-of-day deadline (``"HH:MM"``), or ``None``.
-
-        Prefers the native ``deadline_time`` option; falls back to the legacy
-        ``deadline_entity`` (only its clock time is read — the date is ignored,
-        the deadline recurs daily).
-        """
-        native = str(opts.get(CONF_DEADLINE_TIME, "")).strip()
-        if native:
-            return native
-        entity = opts.get(CONF_DEADLINE_ENTITY, "")
-        if not entity:
-            return None
-        state = self.hass.states.get(entity)
-        if state is None:
-            return None
-        value = state.state
-        if not value or value in ("unknown", "unavailable"):
-            return None
-        return self._extract_time(value)
-
-    @staticmethod
-    def _extract_time(value: str) -> Optional[str]:
-        """Pull a ``"HH:MM"`` clock time out of an input_datetime state string.
-
-        Accepts ``"05:45"``, ``"05:45:00"`` and ``"2026-09-24 05:45:00"``.
-        """
-        match = re.search(r"(\d{1,2}):(\d{2})", str(value))
-        if not match:
-            return None
-        return f"{int(match.group(1)):02d}:{match.group(2)}"
 
     def _day_prices(self, entity_id: str) -> list[helper.DayPrice]:
         """Best-effort per-day price summaries from the ``days`` attribute."""

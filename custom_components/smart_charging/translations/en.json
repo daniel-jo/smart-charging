@@ -16,28 +16,20 @@
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set battery limits, daily consumption, the weekly 100 % boost and the currency of your price data. No price thresholds are needed - cheap hours are derived from the forecast.",
+        "description": "Set battery limits, prices, the weekly 100 % boost and — when the car has regular away-times — the away-window. Tick \"Continuous usage\" and the away-times plus the daily consumption below are used by the plan; the \"from\" time is the new ready-by.",
         "data": {
           "min_soc": "Minimum battery level (%), never plan below this",
           "max_soc": "Maximum battery level (%), normal charging target",
           "battery_capacity_kwh": "Battery capacity (kWh)",
-          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute",
           "charger_max_kw": "Max charger power (kW)",
+          "currency": "Price currency",
           "weekly_full_charge": "Charge to 100 % about once a week (cheapest window)",
           "min_days_between_full": "Minimum days between two 100 % charges",
           "usage_enabled": "Continuous usage - the car has regular away-times",
-          "deadline_time": "Ready by (time, optional) - charging complete before this",
-          "deadline_restart_minutes": "Restart after a passed deadline (minutes, 0 = never)",
-          "currency": "Price currency"
-        }
-      },
-      "usage": {
-        "title": "Continuous usage",
-        "description": "When is the car usually away? Charging only happens while it is home, and the daily consumption is used only while it is away.",
-        "data": {
           "usage_days": "Applies to",
           "usage_away_start": "Usually away from",
-          "usage_away_end": "Usually away until"
+          "usage_away_end": "Usually away until",
+          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute"
         }
       }
     },
@@ -63,28 +55,20 @@
       },
       "params": {
         "title": "Charging parameters",
-        "description": "Set battery limits, daily consumption, the weekly 100 % boost and the currency of your price data. No price thresholds are needed - cheap hours are derived from the forecast.",
+        "description": "Set battery limits, prices, the weekly 100 % boost and — when the car has regular away-times — the away-window. Tick \"Continuous usage\" and the away-times plus the daily consumption below are used by the plan; the \"from\" time is the new ready-by.",
         "data": {
           "min_soc": "Minimum battery level (%), never plan below this",
           "max_soc": "Maximum battery level (%), normal charging target",
           "battery_capacity_kwh": "Battery capacity (kWh)",
-          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute",
           "charger_max_kw": "Max charger power (kW)",
+          "currency": "Price currency",
           "weekly_full_charge": "Charge to 100 % about once a week (cheapest window)",
           "min_days_between_full": "Minimum days between two 100 % charges",
           "usage_enabled": "Continuous usage - the car has regular away-times",
-          "deadline_time": "Ready by (time, optional) - charging complete before this",
-          "deadline_restart_minutes": "Restart after a passed deadline (minutes, 0 = never)",
-          "currency": "Price currency"
-        }
-      },
-      "usage": {
-        "title": "Continuous usage",
-        "description": "When is the car usually away? Charging only happens while it is home, and the daily consumption is used only while it is away.",
-        "data": {
           "usage_days": "Applies to",
           "usage_away_start": "Usually away from",
-          "usage_away_end": "Usually away until"
+          "usage_away_end": "Usually away until",
+          "daily_consumption_pct": "Daily battery use (%), e.g. the daily commute"
         }
       }
     },

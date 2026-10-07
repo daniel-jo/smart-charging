@@ -4,9 +4,9 @@ Set-up is two steps:
 
 1. **Entities** — spot-price forecast sensor, SOC sensor and charger control
    entities.
-2. **Parameters** — battery limits (min/max SOC), capacity, daily
-   consumption, max charger power, the weekly 100 % boost, an optional
-   "ready by" deadline and currency.
+2. **Parameters** — battery limits (min/max SOC), capacity, max charger
+   power, price currency, the weekly 100 % boost and — when the car has
+   regular away-times — the away-window plus daily consumption.
 
 There are NO price thresholds to configure: the integration derives "cheap"
 from the forecast itself.
@@ -33,8 +33,6 @@ from .const import (
     CONF_CHARGER_STOP_BUTTON,
     CONF_CURRENCY,
     CONF_DAILY_CONSUMPTION_PCT,
-    CONF_DEADLINE_RESTART_MINUTES,
-    CONF_DEADLINE_TIME,
     CONF_MAX_SOC,
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
@@ -50,7 +48,6 @@ from .const import (
     DEFAULT_CHARGER_MAX_KW,
     DEFAULT_CURRENCY,
     DEFAULT_DAILY_CONSUMPTION_PCT,
-    DEFAULT_DEADLINE_RESTART_MINUTES,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_DAYS_BETWEEN_FULL,
     DEFAULT_MIN_SOC,
@@ -153,7 +150,11 @@ def _entities_schema(current: dict[str, Any]) -> vol.Schema:
 
 
 def _params_schema(current: dict[str, Any]) -> vol.Schema:
-    """Step 2: battery limits and preferences (no price thresholds)."""
+    """Step 2: battery limits and preferences (no price thresholds).
+
+    The away-window fields (days + from/to times) sit on the same page and
+    are only required while "continuous usage" is on.
+    """
     currency_default = current.get(CONF_CURRENCY)
     currency_field = (
         vol.Required(CONF_CURRENCY, default=currency_default)
@@ -183,19 +184,13 @@ def _params_schema(current: dict[str, Any]) -> vol.Schema:
                 {"number": {"mode": "box", "min": 1, "max": 200, "step": 0.5}}
             ),
             vol.Required(
-                CONF_DAILY_CONSUMPTION_PCT,
-                default=_as_float(
-                    current.get(CONF_DAILY_CONSUMPTION_PCT),
-                    DEFAULT_DAILY_CONSUMPTION_PCT,
-                ),
-            ): selector.selector(
-                {"number": {"mode": "box", "min": 0, "max": 100, "step": 1}}
-            ),
-            vol.Required(
                 CONF_CHARGER_MAX_KW,
                 default=_as_float(current.get(CONF_CHARGER_MAX_KW), DEFAULT_CHARGER_MAX_KW),
             ): selector.selector(
                 {"number": {"mode": "box", "min": 1, "max": 22, "step": 0.1}}
+            ),
+            currency_field: selector.selector(
+                {"select": {"options": list(CURRENCY_OPTIONS), "mode": "dropdown"}}
             ),
             vol.Required(
                 CONF_WEEKLY_FULL_CHARGE,
@@ -219,20 +214,27 @@ def _params_schema(current: dict[str, Any]) -> vol.Schema:
                 ),
             ): selector.BooleanSelector(),
             vol.Optional(
-                CONF_DEADLINE_TIME,
-                default=_entity_option(current.get(CONF_DEADLINE_TIME, "")),
+                CONF_USAGE_DAYS,
+                default=current.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS),
+            ): selector.selector(
+                {"select": {"options": list(USAGE_DAY_OPTIONS), "mode": "dropdown"}}
+            ),
+            vol.Optional(
+                CONF_USAGE_AWAY_START,
+                default=_entity_option(current.get(CONF_USAGE_AWAY_START, "")),
             ): selector.TimeSelector(),
             vol.Optional(
-                CONF_DEADLINE_RESTART_MINUTES,
+                CONF_USAGE_AWAY_END,
+                default=_entity_option(current.get(CONF_USAGE_AWAY_END, "")),
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_DAILY_CONSUMPTION_PCT,
                 default=_as_float(
-                    current.get(CONF_DEADLINE_RESTART_MINUTES),
-                    DEFAULT_DEADLINE_RESTART_MINUTES,
+                    current.get(CONF_DAILY_CONSUMPTION_PCT),
+                    DEFAULT_DAILY_CONSUMPTION_PCT,
                 ),
             ): selector.selector(
-                {"number": {"mode": "box", "min": 0, "max": 600, "step": 5}}
-            ),
-            currency_field: selector.selector(
-                {"select": {"options": list(CURRENCY_OPTIONS), "mode": "dropdown"}}
+                {"number": {"mode": "box", "min": 0, "max": 100, "step": 1}}
             ),
         }
     )
@@ -251,26 +253,15 @@ def _normalize_hm(value: Any) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
-def _usage_schema(current: dict[str, Any]) -> vol.Schema:
-    """The away-window step shown when "continuous usage" is enabled."""
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_USAGE_DAYS,
-                default=current.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS),
-            ): selector.selector(
-                {"select": {"options": list(USAGE_DAY_OPTIONS), "mode": "dropdown"}}
-            ),
-            vol.Required(
-                CONF_USAGE_AWAY_START,
-                default=current.get(CONF_USAGE_AWAY_START, ""),
-            ): selector.TimeSelector(),
-            vol.Required(
-                CONF_USAGE_AWAY_END,
-                default=current.get(CONF_USAGE_AWAY_END, ""),
-            ): selector.TimeSelector(),
-        }
-    )
+def _validate_params(user_input: dict[str, Any]) -> dict[str, str]:
+    """Validate the merged params form; returns a field -> error-key map.
+
+    The away-window fields are only required (and must differ) when
+    "continuous usage" is enabled; otherwise they are ignored.
+    """
+    if not _as_bool(user_input.get(CONF_USAGE_ENABLED), DEFAULT_USAGE_ENABLED):
+        return {}
+    return _validate_usage(user_input)
 
 
 def _validate_usage(user_input: dict[str, Any]) -> dict[str, str]:
@@ -295,12 +286,11 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the flow."""
         self._entity_data: dict[str, Any] = {}
-        self._params_data: dict[str, Any] = {}
 
     async def async_step_user(
         self, user_input: Optional[dict[str, Any]] = None
     ) -> FlowResult:
-        """Step 1: select entities (prices, SOC, charger controls, deadline)."""
+        """Step 1: select entities (prices, SOC and charger controls)."""
         errors: dict[str, str] = {}
         if user_input is not None:
             self._entity_data = dict(user_input)
@@ -326,46 +316,20 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_params(
         self, user_input: Optional[dict[str, Any]] = None
     ) -> FlowResult:
-        """Step 2: battery limits, boost and currency."""
+        """Step 2: battery limits, prices, weekly boost and away-times."""
         errors: dict[str, str] = {}
         entity_data = getattr(self, "_entity_data", {})
         if user_input is not None:
-            if _as_bool(user_input.get(CONF_USAGE_ENABLED), DEFAULT_USAGE_ENABLED):
-                self._params_data = dict(user_input)
-                return self.async_show_form(
-                    step_id="usage",
-                    data_schema=_usage_schema({}),
-                    errors={},
-                    last_step=True,
-                )
-            return self.async_create_entry(
-                title="Smart Charging",
-                data={**entity_data, **user_input, CONF_MODE: MODE_PLAN},
-            )
-
-        return self.async_show_form(
-            step_id="params",
-            data_schema=_params_schema(entity_data),
-            errors=errors,
-        )
-
-    async def async_step_usage(
-        self, user_input: Optional[dict[str, Any]] = None
-    ) -> FlowResult:
-        """Step 2b: away-window (shown only when "continuous usage" is on)."""
-        errors: dict[str, str] = {}
-        entity_data = getattr(self, "_entity_data", {})
-        params_data = getattr(self, "_params_data", {})
-        if user_input is not None:
-            errors = _validate_usage(user_input)
+            errors = _validate_params(user_input)
             if not errors:
                 return self.async_create_entry(
                     title="Smart Charging",
-                    data={**entity_data, **params_data, **user_input, CONF_MODE: MODE_PLAN},
+                    data={**entity_data, **user_input, CONF_MODE: MODE_PLAN},
                 )
+
         return self.async_show_form(
-            step_id="usage",
-            data_schema=_usage_schema(user_input or params_data),
+            step_id="params",
+            data_schema=_params_schema(user_input or entity_data),
             errors=errors,
             last_step=True,
         )
@@ -392,7 +356,6 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
         self._entity_data: dict[str, Any] = {}
-        self._params_data: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: Optional[dict[str, Any]] = None
@@ -427,10 +390,8 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
                     CONF_MIN_DAYS_BETWEEN_FULL: entry_data.get(
                         CONF_MIN_DAYS_BETWEEN_FULL, DEFAULT_MIN_DAYS_BETWEEN_FULL
                     ),
-                    CONF_DEADLINE_TIME: entry_data.get(CONF_DEADLINE_TIME, ""),
-                    CONF_DEADLINE_RESTART_MINUTES: entry_data.get(
-                        CONF_DEADLINE_RESTART_MINUTES, DEFAULT_DEADLINE_RESTART_MINUTES
-                    ),
+                    # Currency is kept raw; an unset value falls back to the
+                    # default when the params schema is built.
                     CONF_USAGE_ENABLED: entry_data.get(
                         CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED
                     ),
@@ -472,47 +433,16 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
             {**self._config_entry.data, **self._config_entry.options},
         )
         if user_input is not None:
-            if _as_bool(user_input.get(CONF_USAGE_ENABLED), DEFAULT_USAGE_ENABLED):
-                self._params_data = dict(user_input)
-                return self.async_show_form(
-                    step_id="usage",
-                    data_schema=_usage_schema({}),
-                    errors={},
-                    last_step=True,
-                )
-            data = dict(self._config_entry.data)
-            data.update(entity_data)
-            data.update(user_input)
-            return self.async_create_entry(title="", data=data)
-
-        return self.async_show_form(
-            step_id="params",
-            data_schema=_params_schema(entity_data),
-            errors=errors,
-        )
-
-    async def async_step_usage(
-        self, user_input: Optional[dict[str, Any]] = None
-    ) -> FlowResult:
-        """Away-window step (only reached when "continuous usage" is on)."""
-        errors: dict[str, str] = {}
-        entity_data = getattr(
-            self,
-            "_entity_data",
-            {**self._config_entry.data, **self._config_entry.options},
-        )
-        params_data = getattr(self, "_params_data", {})
-        if user_input is not None:
-            errors = _validate_usage(user_input)
+            errors = _validate_params(user_input)
             if not errors:
                 data = dict(self._config_entry.data)
                 data.update(entity_data)
-                data.update(params_data)
                 data.update(user_input)
                 return self.async_create_entry(title="", data=data)
+
         return self.async_show_form(
-            step_id="usage",
-            data_schema=_usage_schema(user_input or params_data),
+            step_id="params",
+            data_schema=_params_schema(user_input or entity_data),
             errors=errors,
             last_step=True,
         )
