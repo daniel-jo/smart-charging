@@ -132,6 +132,35 @@ The plan is always only *information* — it never touches the charger by
 itself. Only **Live** writes to the charger (operation-mode switch +
 resume/stop buttons), and only for a car that reports as connected.
 
+### Plug-in guard (Live): the car may not auto-start outside the plan
+
+Many cars begin charging the moment the cable goes in — even before the
+cheap night window. The plan alone cannot stop that (before the first
+session its action is `resume`), so Live keeps a small plug-in guard:
+
+- On the **plug-in edge** (the charger-mode sensor leaves `disconnected`)
+  a **120 s grace window** starts.
+- Charging that **appears inside the grace window, outside any planned
+  session**, is treated as the car's **auto-start** and is **stopped once**
+  (`stop` button + operation switch off, logged in the logbook).
+- Charging that appears **after the window** is treated as a **manual user
+  start**: `manual_override` (a plan-sensor attribute) is set and the
+  integration **backs off entirely** — the plan still previews, but no
+  `stop` is executed.
+- The override clears when **charging stops** (`connected_finished`) or the
+  **cable is unplugged** — whichever comes first. Control returns to the
+  plan.
+- Charging **inside a planned session** is never touched, and nothing is
+  ever issued from the very first observation (e.g. right after an HA
+  restart), so an ongoing charge is never killed blindly.
+- Without a configured charger-mode sensor the guard has nothing to stand
+  on and stays hands-off (a warning is logged).
+
+A scheduled `resume` is additionally **never executed before its time**
+(`next_action.at`), and never once `max_soc` is reached (the weekly 100 %
+boost, which deliberately charges past `max_soc` on its own window, is the
+only exception).
+
 Switch modes via `select.smart_charging_mode` or the HA Services → Developer
 Tools.
 

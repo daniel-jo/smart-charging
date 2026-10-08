@@ -143,6 +143,7 @@ class SmartChargingPlanSensor(CoordinatorEntity, SensorEntity):
             "soc_source": plan.soc_source,
             "min_soc": plan.min_soc,
             "max_soc": plan.max_soc,
+            "manual_override": self.coordinator.manual_override,
             "daily_consumption_pct": plan.daily_consumption_pct,
             "threshold_start": plan.threshold_start,
             "threshold_stop": plan.threshold_stop,

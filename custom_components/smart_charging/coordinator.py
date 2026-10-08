@@ -61,6 +61,7 @@ from .const import (
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_DAYS_BETWEEN_FULL,
     DEFAULT_MIN_SOC,
+    DEFAULT_PLUG_IN_GRACE_SECONDS,
     DEFAULT_SOC_STALE_HOURS,
     DEFAULT_STATS_SAMPLE_SECONDS,
     DEFAULT_UPDATE_INTERVAL_MINUTES,
@@ -147,6 +148,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         self._hass_start_unsub: Optional[CALLBACK_TYPE] = None
         self._last_action_signature: Optional[str] = None
         self._last_summary: Optional[str] = None
+        # --- Live plug-in guard -------------------------------------------
+        # The car auto-starts on plug-in; without this the auto-start outside
+        # the planned window is never stopped (the plan says "resume" before
+        # the first session). ``_guard`` tracks plug-in edges, the
+        # post-plug-in grace window and the manual override (user runs the
+        # show until charging stops or the cable is unplugged).
+        self._guard = helper.ConnectionGuard()
         self._mode: str = str(entry.data.get("mode", MODE_PLAN))
         self._boundary_timer: Optional[CALLBACK_TYPE] = None
         self._last_full_charge: Optional[datetime] = self._parse_ts(
@@ -197,6 +205,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
     @property
     def mode(self) -> str:
         return self._mode
+
+    @property
+    def manual_override(self) -> bool:
+        """True while the user runs the show (Live manual charge outside the
+        plan). Control returns to the plan when charging stops or the cable
+        is unplugged. Exposed on the plan sensor as ``manual_override``."""
+        return self._guard.manual_override
 
     @property
     def entry(self) -> ConfigEntry:
@@ -299,13 +314,20 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     def _schedule_boundary_timer(self, plan: helper.Plan) -> None:
-        """Wake at the next away-window boundary so the plan flips on the minute."""
+        """Wake at the next plan/action boundary so resume/stop land on time.
+
+        Apart from the away-window transition this now includes the planned
+        session starts/ends: a ``resume`` annotated with a future ``at`` must
+        not be executed early, so the recompute has to land exactly when the
+        window opens (and closes).
+        """
         if self._boundary_timer is not None:
             self._boundary_timer()
             self._boundary_timer = None
         instants = []
         if plan.usage_next is not None:
             instants.append(plan.usage_next)
+        instants.extend(helper.session_boundaries(plan))
         future_instants = [
             dt_util.as_utc(t)
             for t in instants
@@ -319,7 +341,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         )
 
     async def _on_boundary(self, _point_in_time: Any) -> None:
-        """An away-window boundary passed — recompute so the plan flips state."""
+        """A plan/action boundary passed — recompute so the plan flips state."""
         self._boundary_timer = None
         await self.async_request_refresh()
 
@@ -409,6 +431,11 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             self._logbook(plan)
             self._last_summary = plan.summary
 
+        # Plug-in guard (Live only): stop a plug-in auto-start outside the
+        # planned window once, and let a later manual start through. Runs
+        # before the regular dispatch so the guard-stop is not mixed up with
+        # the plan's own next-action handling.
+        await self._enforce_plug_in_guard(plan, opts)
         await self._maybe_act(plan)
         self._schedule_boundary_timer(plan)
 
@@ -430,6 +457,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             # the next engagement counts as a new "session".
             self._stats_active_modes.clear()
             self._close_live_window()
+            # Stale intent dies: a manual override from another mode must
+            # never leak in, and an unknown guard state keeps hands off.
+            self._guard = helper.connection_guard_reset_on_mode()
         self._mode = mode
         await self.async_request_refresh()
 
@@ -760,6 +790,23 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             )
         return parsed
 
+    def _charger_mode_state(self, entity_id: str) -> Optional[str]:
+        """Raw charger-mode sensor value (lower-cased) or ``None``.
+
+        ``None`` covers "not configured", missing state, ``unknown`` and
+        ``unavailable`` — all cases where the guard has nothing to stand on
+        and must keep its hands off the charger.
+        """
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state is None:
+            return None
+        value = str(state.state).strip().lower()
+        if value in ("", "unknown", "unavailable"):
+            return None
+        return value
+
     def _is_connected(self, entity_id: str) -> bool:
         """Map the charger mode sensor to a boolean 'connected'."""
         if not entity_id:
@@ -870,6 +917,68 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
     # Live actions & logbook
     # ------------------------------------------------------------------
+    async def _press_stop(self, opts: dict) -> None:
+        """Press the stop button (+ operation switch off), shared by callers."""
+        stop_button = opts.get(CONF_CHARGER_STOP_BUTTON, "")
+        if stop_button:
+            await self.hass.services.async_call(
+                "button", "press", {"entity_id": stop_button}, blocking=True
+            )
+        op_mode_entity = opts.get(CONF_CHARGER_OPERATION_MODE, "")
+        if op_mode_entity:
+            await self.hass.services.async_call(
+                "switch", "turn_off", {"entity_id": op_mode_entity}, blocking=True
+            )
+        # No priming here: the final sample in ``_update_statistics`` (right
+        # after this) captures the interval since the last timer read.
+        self._logbook_action("stop_charging")
+
+    async def _enforce_plug_in_guard(self, plan: helper.Plan, opts: dict) -> None:
+        """In Live mode, stop a plug-in auto-start outside the planned window.
+
+        The plan itself cannot do this: before the first planned session its
+        ``next_action`` is ``resume``, so the auto-start would be blessed
+        rather than stopped. The guard steps the plug-in state machine
+        (pure — see ``helper.connection_guard_step``) and executes the one
+        resulting stop, in Live mode only.
+
+        No charger-mode sensor configured, or a missing/unknown sensor
+        value: the guard has nothing to stand on and stays hands-off.
+        """
+        if self._mode != MODE_LIVE:
+            return
+        mode_entity = opts.get(CONF_CHARGER_MODE_SENSOR, "")
+        mode_state = self._charger_mode_state(mode_entity)
+        if mode_state is None:
+            if self._guard.prev_mode_state is not None:
+                _LOGGER.warning(
+                    "Plug-in guard idle: charger mode sensor %r is "
+                    "unavailable — auto-start outside the plan is not stopped",
+                    mode_entity,
+                )
+            self._guard.prev_mode_state = None
+            return
+        prev_manual_override = self._guard.manual_override
+        step = helper.connection_guard_step(
+            mode_state=mode_state,
+            prev_mode_state=self._guard.prev_mode_state,
+            now=self.now,
+            in_session=self._charging_active(plan),
+            plug_in_at=self._guard.plug_in_at,
+            manual_override=self._guard.manual_override,
+            grace_seconds=DEFAULT_PLUG_IN_GRACE_SECONDS,
+        )
+        self._guard.prev_mode_state = mode_state
+        self._guard.plug_in_at = step.plug_in_at
+        self._guard.manual_override = step.manual_override
+        if self._guard.manual_override and not prev_manual_override:
+            self._logbook_action("manual_override_outside_plan")
+        if step.action == helper.GUARD_STOP:
+            await self._press_stop(opts)
+            _LOGGER.info(
+                "Plug-in guard: stopped auto-started charge outside the plan"
+            )
+
     async def _maybe_act(self, plan: helper.Plan) -> None:
         """In Live mode, drive the charger toward the desired next action."""
         if self._mode != MODE_LIVE:
@@ -877,6 +986,40 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         na = plan.next_action
         if na is None:
             return
+
+        if self._guard.manual_override:
+            # The user started charging manually outside the plan — hands off
+            # until charging stops or the cable is unplugged (whichever comes
+            # first). The plan still previews; nothing is executed.
+            if na.action == "stop":
+                _LOGGER.debug(
+                    "Manual override: skipping plan-driven stop "
+                    "(action=stop reason=%s), waiting for manual stop/unplug",
+                    na.reason,
+                )
+            return
+
+        if na.action == "resume":
+            # Belt-and-braces: never resume once the normal cap is reached
+            # (the plan builder already emits stop/complete here). The weekly
+            # 100 % boost is the plan's own intent and is exempt.
+            if helper.max_soc_reached(plan):
+                _LOGGER.warning(
+                    "Not resuming: battery at/above max_soc %.0f %% (soc %.1f %%)",
+                    plan.max_soc,
+                    plan.soc_now if plan.soc_now is not None else float("nan"),
+                )
+                return
+            # A resume annotated with a future time must wait for it — never
+            # undo a plug-in stop (or start early) before the window opens.
+            resume_at = helper.pending_resume_at(plan)
+            if resume_at is not None and self.now < resume_at:
+                _LOGGER.debug(
+                    "Deferring resume until %s (now %s)",
+                    resume_at.isoformat(),
+                    self.now.isoformat(),
+                )
+                return
 
         signature = f"{na.action}|{na.at and na.at.isoformat() or ''}|{na.reason}"
         if signature == self._last_action_signature:
@@ -886,7 +1029,6 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         opts = self.options
         op_mode_entity = opts.get(CONF_CHARGER_OPERATION_MODE, "")
         resume_button = opts.get(CONF_CHARGER_RESUME_BUTTON, "")
-        stop_button = opts.get(CONF_CHARGER_STOP_BUTTON, "")
 
         if na.action == "resume":
             if op_mode_entity:
@@ -903,17 +1045,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             self._prime_live_energy()
             self._logbook_action("resume_charging")
         elif na.action == "stop":
-            if stop_button:
-                await self.hass.services.async_call(
-                    "button", "press", {"entity_id": stop_button}, blocking=True
-                )
-            if op_mode_entity:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": op_mode_entity}, blocking=True
-                )
-            # No priming here: the final sample in ``_update_statistics`` (right
-            # after this) captures the interval since the last timer read.
-            self._logbook_action("stop_charging")
+            await self._press_stop(opts)
 
     def _logbook(self, plan: helper.Plan) -> None:
         """Write a plan recompute line to the logbook."""

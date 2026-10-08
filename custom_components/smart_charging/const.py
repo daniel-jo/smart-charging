@@ -76,3 +76,9 @@ DEFAULT_STATS_SAMPLE_SECONDS = 60
 #   disconnected, connected_requesting, connected_charging,
 #   connected_finished, unknown, ...
 CHARGER_CONNECTED_STATES = {"connected_requesting", "connected_charging"}
+
+# --- plug-in guard (Live) ----------------------------------------------------
+# Grace (seconds) after a plug-in edge (disconnected -> plugged) during which
+# an appearing charge is treated as the car's own auto-start rather than a
+# manual user start.
+DEFAULT_PLUG_IN_GRACE_SECONDS = 120.0

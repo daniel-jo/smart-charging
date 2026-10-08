@@ -795,6 +795,194 @@ def test_assumed_soc_above_target_gives_no_charge():
     assert plan.soc_source == "assumed"
 
 
+def _guard_step(**kw) -> helper.ConnectionGuardStep:
+    """One plug-in guard evaluation (thin wrapper for readability)."""
+    return helper.connection_guard_step(**kw)
+
+
+def test_plug_in_guard_first_observation_never_acts():
+    now = _now(12)
+    step = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state=None,
+        now=now,
+        in_session=False,
+        plug_in_at=None,
+        manual_override=False,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert (step.plug_in_at, step.manual_override) == (None, False)
+
+
+def test_plug_in_guard_auto_start_within_grace_stops():
+    plugged = _now(12)
+    step = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state="disconnected",
+        now=plugged,
+        in_session=False,
+        plug_in_at=None,
+        manual_override=False,
+    )
+    assert step.action == helper.GUARD_STOP
+    assert step.plug_in_at == plugged
+    assert step.manual_override is False
+    # A recompute 30 s later (same plug-in, still outside the window) holds
+    # the stop — the car must not restart on its own.
+    again = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state="connected_charging",
+        now=plugged + timedelta(seconds=30),
+        in_session=False,
+        plug_in_at=step.plug_in_at,
+        manual_override=step.manual_override,
+    )
+    assert again.action == helper.GUARD_STOP
+
+
+def test_plug_in_guard_charge_inside_session_is_untouched():
+    plugged = _now(12)
+    step = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state="disconnected",
+        now=plugged,
+        in_session=True,
+        plug_in_at=None,
+        manual_override=False,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert step.manual_override is False
+
+
+def test_plug_in_guard_manual_start_after_grace_is_allowed():
+    plugged = _now(12)
+    step = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state="connected_charging",
+        now=plugged + timedelta(minutes=10),
+        in_session=False,
+        plug_in_at=plugged,
+        manual_override=False,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert step.manual_override is True
+    # …and the manual charge keeps running without further stops.
+    later = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state="connected_charging",
+        now=plugged + timedelta(minutes=20),
+        in_session=False,
+        plug_in_at=step.plug_in_at,
+        manual_override=step.manual_override,
+    )
+    assert later.action == helper.GUARD_NONE
+    assert later.manual_override is True
+
+
+def test_plug_in_guard_manual_stop_hands_back_to_plan():
+    plugged = _now(12)
+    step = _guard_step(
+        mode_state="connected_finished",
+        prev_mode_state="connected_charging",
+        now=plugged + timedelta(minutes=20),
+        in_session=False,
+        plug_in_at=plugged,
+        manual_override=True,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert step.manual_override is False
+
+
+def test_plug_in_guard_unplug_resets():
+    plugged = _now(12)
+    step = _guard_step(
+        mode_state="disconnected",
+        prev_mode_state="connected_charging",
+        now=plugged + timedelta(minutes=5),
+        in_session=False,
+        plug_in_at=plugged,
+        manual_override=True,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert (step.plug_in_at, step.manual_override) == (None, False)
+
+
+def test_plug_in_guard_unknown_state_resets_and_stays_hands_off():
+    step = _guard_step(
+        mode_state=None,
+        prev_mode_state="connected_charging",
+        now=_now(12),
+        in_session=False,
+        plug_in_at=_now(11),
+        manual_override=True,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert (step.plug_in_at, step.manual_override) == (None, False)
+
+
+def test_plug_in_guard_finished_counts_as_plugged_no_action():
+    plugged = _now(12)
+    step = _guard_step(
+        mode_state="connected_finished",
+        prev_mode_state="connected_charging",
+        now=plugged + timedelta(seconds=30),
+        in_session=False,
+        plug_in_at=plugged,
+        manual_override=False,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert step.manual_override is False
+
+
+# ---------------------------------------------------------------------------
+# max_soc guard: never resume once the normal cap is reached
+# ---------------------------------------------------------------------------
+
+
+def test_max_soc_reached_needs_no_charge_and_no_resume():
+    plan = _cp(price_hours=_day_night_prices(days=2), soc_now=85.0, max_soc=80.0)
+    assert plan.sessions == []
+    assert plan.next_action.action == "stop"
+    assert plan.next_action.reason == "complete"
+    assert helper.max_soc_reached(plan) is True
+    assert helper.pending_resume_at(plan) is None
+
+
+def test_max_soc_reached_weekly_boost_is_the_plans_own_intent():
+    plan = _cp(
+        price_hours=_day_night_prices(days=14, override=CHEAP_WINDOW),
+        soc_now=85.0,
+        max_soc=80.0,
+        weekly_full_charge=True,
+        min_days_between_full=5.0,
+        last_full_charge=BASE - timedelta(days=6),
+    )
+    assert plan.boost_scheduled is True
+    # The boost deliberately charges past max_soc: exempt, by design.
+    assert helper.max_soc_reached(plan) is False
+
+
+def test_pending_resume_at_gates_future_resume():
+    ready = _day_night_prices(days=2)
+    now = BASE - timedelta(hours=1)  # 23:00 → first session at 00:00
+    plan = _cp(price_hours=ready, now=now)
+    assert plan.next_action.action == "resume"
+    assert helper.pending_resume_at(plan) == plan.next_action.at
+    assert plan.next_action.at > now
+
+
+def test_session_boundaries_still_future_only():
+    ready = _day_night_prices(days=2)
+    plan = _cp(price_hours=ready, now=BASE)
+    bounds = helper.session_boundaries(plan)
+    assert bounds
+    # The plan starts right now, so the first start is "now" (not future);
+    # every boundary the timer needs lies strictly ahead.
+    assert all(b > BASE for b in bounds)
+    assert bounds == sorted(bounds)
+    assert plan.sessions[-1].end in bounds
+
+
 # ---------------------------------------------------------------------------
 # Run standalone
 # ---------------------------------------------------------------------------

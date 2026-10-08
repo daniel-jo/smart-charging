@@ -45,6 +45,26 @@ _MODE_LIVE = "live"
 # Share of the forecast hours treated as "cheap" for topping up.
 CHEAP_QUANTILE = 0.25
 
+# Charger mode sensor states (Zaptec integration >= 0.8, lower case).
+# "plugged" means the cable is physically in — even when nothing flows
+# (e.g. a session the integration itself stopped, which typically lands on
+# ``connected_finished``). Only ``connected_charging`` means energy flows.
+PLUGGED_STATES = frozenset(
+    {"connected_requesting", "connected_charging", "connected_finished"}
+)
+CHARGING_STATES = frozenset({"connected_charging"})
+
+# Plug-in guard actions (see ``connection_guard_step``).
+GUARD_NONE = "none"
+GUARD_STOP = "stop"
+
+# Grace (seconds) after a plug-in edge during which an appearing charge is
+# treated as the car's own auto-start rather than a manual user start.
+# Mirrors ``DEFAULT_PLUG_IN_GRACE_SECONDS`` in ``const.py``; duplicated here
+# so this module stays free of Home Assistant imports (unit-testable,
+# dry-run-friendly).
+PLUG_IN_GRACE_SECONDS = 120.0
+
 
 @dataclass(frozen=True)
 class PriceHour:
@@ -630,6 +650,154 @@ def compute_plan(
         plan.summary = f"{prefix} — {plan.summary}" if plan.summary else prefix
 
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Plug-in guard (Live)
+# ---------------------------------------------------------------------------
+#
+# Charging intent — who is charging and why — is NOT observable from HA. The
+# only robust discriminator is *time*: the car normally auto-starts within
+# seconds of the cable going in, while a user pressing "start" does so later
+# ("you know better"). The guard therefore works like this:
+#
+# - A plug-in edge (not plugged -> plugged) starts a grace window
+#   (``grace_seconds``). Charging that *appears* inside the window, outside
+#   any planned session, is treated as the car's auto-start and stopped once.
+# - Charging that appears *after* the window, outside any planned session,
+#   is treated as a manual user start: ``manual_override`` is set and the
+#   integration backs off entirely (no ``stop``) until charging stops or the
+#   cable is unplugged (whichever comes first). Clearing ``manual_override``
+#   hands control back to the plan.
+# - Charging inside a planned session is never touched.
+# - On the very first observation (the coordinator has no previous state,
+#   e.g. right after an HA restart) nothing is ever issued — an ongoing,
+#   possibly manual, charge must never be killed blindly.
+
+
+@dataclass
+class ConnectionGuard:
+    """Live plug-in guard state, carried across recomputes by the coordinator."""
+
+    prev_mode_state: Optional[str] = None  # last seen raw charger-mode value
+    plug_in_at: Optional[datetime] = None  # start of the current grace window
+    manual_override: bool = False  # user runs the show until stop/unplug
+
+
+@dataclass
+class ConnectionGuardStep:
+    """One guard evaluation: action + the state the coordinator must keep."""
+
+    action: str  # GUARD_NONE | GUARD_STOP
+    plug_in_at: Optional[datetime] = None
+    manual_override: bool = False
+
+
+def connection_guard_step(
+    *,
+    mode_state: Optional[str],
+    prev_mode_state: Optional[str],
+    now: datetime,
+    in_session: bool,
+    plug_in_at: Optional[datetime],
+    manual_override: bool,
+    grace_seconds: float = PLUG_IN_GRACE_SECONDS,
+) -> ConnectionGuardStep:
+    """Decide whether to stop an out-of-window charge.
+
+    ``mode_state`` is the raw charger-mode sensor value (lower-cased Zaptec
+    states, ``None`` when the sensor is missing or unknown). ``in_session``
+    is True while a planned session covers the current moment. Never issues
+    ``GUARD_STOP`` for charging that is already covered by the plan.
+
+    The states ``"unknown"``/``"unavailable"`` are treated as *not* plugged
+    and reset the guard (plug_in_at/override move on below), so the next
+    clean observation starts from a known edge.
+    """
+    plugged = mode_state in PLUGGED_STATES
+
+    # First observation ever (HA start/restart): set a baseline, never act.
+    if prev_mode_state is None:
+        return ConnectionGuardStep(GUARD_NONE, None, False)
+
+    if not plugged:
+        # Cable out (or unknown) — control returns to the plan.
+        return ConnectionGuardStep(GUARD_NONE, None, False)
+
+    if prev_mode_state not in PLUGGED_STATES:
+        # Plug-in edge: restart the grace window, hand control to the plan.
+        plug_in_at = now
+        manual_override = False
+
+    charging = mode_state in CHARGING_STATES
+
+    if not charging:
+        if manual_override:
+            # The manual charge was stopped — the plan takes over again.
+            manual_override = False
+        return ConnectionGuardStep(GUARD_NONE, plug_in_at, manual_override)
+
+    if in_session or manual_override:
+        # Inside a planned session, or the user runs the show: hands off.
+        return ConnectionGuardStep(GUARD_NONE, plug_in_at, manual_override)
+
+    if plug_in_at is not None and (now - plug_in_at).total_seconds() <= (
+        grace_seconds if grace_seconds > 0 else 0.0
+    ):
+        # Auto-start within the grace window after plug-in: stop it once.
+        return ConnectionGuardStep(GUARD_STOP, plug_in_at, False)
+
+    # Charging appeared long after plug-in: the user started it manually.
+    return ConnectionGuardStep(GUARD_NONE, plug_in_at, True)
+
+
+def connection_guard_reset_on_mode() -> ConnectionGuard:
+    """Fresh guard state when the operating mode changes (stale intent dies)."""
+    return ConnectionGuard()
+
+
+def max_soc_reached(plan: Plan) -> bool:
+    """True when the plan's battery level has reached the normal cap.
+
+    The weekly 100 % boost deliberately charges *past* ``max_soc`` on its own
+    window, so a scheduled boost is excluded: it is the plan's own intent,
+    not out-of-window charging. Belt-and-braces alongside the plan builder,
+    which already emits ``stop``/``complete`` here — the dispatcher must
+    never ``resume`` against this.
+    """
+    if plan is None or plan.soc_now is None or not isfinite(plan.soc_now):
+        return False
+    if plan.boost_scheduled:
+        return False
+    return plan.soc_now >= plan.max_soc - 1e-9
+
+
+def pending_resume_at(plan: Plan) -> Optional[datetime]:
+    """Earliest moment the dispatcher may ``resume`` charging.
+
+    ``None`` when there is no scheduled ``resume`` (plan wants ``stop`` or
+    ``none``). The planner annotates ``resume`` with the future session's
+    start (``next_action.at``); the dispatcher must not act before it —
+    otherwise it would undo a plug-in stop (or start charging early).
+    """
+    if plan is None or plan.next_action is None:
+        return None
+    if plan.next_action.action != "resume" or plan.next_action.at is None:
+        return None
+    return plan.next_action.at
+
+
+def session_boundaries(plan: Plan) -> list[datetime]:
+    """Starts/ends of planned sessions still in the future (action timers)."""
+    if plan is None or not plan.sessions:
+        return []
+    now = plan.updated
+    instants: list[datetime] = []
+    for sess in plan.sessions:
+        for instant in (sess.start, sess.end):
+            if instant is not None and (now is None or instant > now):
+                instants.append(instant)
+    return instants
 
 
 def planned_hours(sessions: list[ChargingSession]) -> list[dict]:
