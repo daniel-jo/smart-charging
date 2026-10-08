@@ -92,13 +92,54 @@ def test_off_mode_returns_empty_plan():
     assert plan.summary == "Av"
 
 
-def test_disconnected_live_returns_empty():
-    """Live must never build a plan for a detached car — guarded."""
-    plan = _cp(connected=False, mode=helper._MODE_LIVE)
-    assert plan.sessions == []
-    assert plan.next_action.action == "stop"
+def test_disconnected_live_still_plans():
+    """Live previews the plan for a detached car — only writes are gated.
+
+    The plan is information only in every mode; protecting a detached car
+    from writes is the dispatcher's job (``_maybe_act``), never the
+    planner's. Sessions and the calendar are still built, but the action is
+    neutralised and the missing cable stays visible in the summary.
+    """
+    plan = _cp(
+        price_hours=_day_night_prices(days=2),
+        connected=False,
+        mode=helper._MODE_LIVE,
+        now=_now(0),
+    )
+    assert plan.sessions
+    assert plan.next_action.action == "none"
     assert plan.next_action.reason == "disconnected"
-    assert plan.summary == "Ej inkopplad"
+    assert plan.summary.startswith("Ej inkopplad —")
+    assert "SEK/kWh" in plan.summary
+
+
+def test_disconnected_live_inside_session_still_idle():
+    """A session covering 'now' still yields no action while detached."""
+    prices = _day_night_prices(days=2, override={0: 0.3})
+    plan = _cp(
+        price_hours=prices,
+        connected=False,
+        mode=helper._MODE_LIVE,
+        soc_now=30.0,
+        now=_now(0.5),
+    )
+    assert plan.sessions
+    assert [s.start for s in plan.sessions][0] <= _now(0.5)
+    assert plan.next_action.action == "none"
+    assert plan.next_action.reason == "disconnected"
+
+
+def test_connected_from_mode_state():
+    """Cable-in states count as connected; gaps stay unknown (None)."""
+    assert helper.connected_from_mode_state("connected_requesting") is True
+    assert helper.connected_from_mode_state("connected_charging") is True
+    assert helper.connected_from_mode_state("connected_finished") is True
+    assert helper.connected_from_mode_state("disconnected") is False
+    assert helper.connected_from_mode_state("error") is False
+    assert helper.connected_from_mode_state("UNKNOWN") is None
+    assert helper.connected_from_mode_state("unavailable") is None
+    assert helper.connected_from_mode_state("  ") is None
+    assert helper.connected_from_mode_state(None) is None
 
 
 def test_disconnected_plan_mode_still_plans():

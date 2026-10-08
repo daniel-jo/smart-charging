@@ -126,11 +126,23 @@ intact during the daily commute. The new `soc_source` attribute on
 |---|---|---|---|---|
 | **Av** | `sensor.smart_charging_plan` = `"Av"` | No | Never | Manual/off |
 | **Planläge (test)** | Plan + logbook | Yes | **No** | Verify decisions risk-free; a plan is also built while the car is disconnected |
-| **Live** | Plan + logbook | Yes | Yes | Enable charging |
+| **Live** | Plan + logbook | Yes | Yes — only while connected | Enable charging |
 
 The plan is always only *information* — it never touches the charger by
-itself. Only **Live** writes to the charger (operation-mode switch +
-resume/stop buttons), and only for a car that reports as connected.
+itself, and it is always built (in every mode), even while the car is
+disconnected. A disconnected car in **Live** still gets its sessions and
+calendar events; only the action is neutralised, and the missing cable stays
+visible in the summary (`Ej inkopplad — …`), with the decision sensor at
+`none`. Only **Live** writes to the charger (operation-mode switch +
+resume/stop buttons), and only for a car that reports as connected: the
+connection check lives where the writes happen (`_maybe_act`), never in the
+plan itself.
+
+"Connected" means the cable is physically in — `connected_requesting`,
+`connected_charging` **and** `connected_finished` (plugged but idle, e.g.
+after a finished or stopped session). `unknown` / `unavailable` are *not*
+treated as unplugged: the last known connection status is kept instead, so a
+transient read gap can neither turn the plan empty nor stop a running charge.
 
 ### Plug-in guard (Live): the car may not auto-start outside the plan
 
@@ -162,7 +174,8 @@ boost, which deliberately charges past `max_soc` on its own window, is the
 only exception).
 
 Switch modes via `select.smart_charging_mode` or the HA Services → Developer
-Tools.
+Tools. The chosen mode is **remembered in the config entry** and survives
+Home Assistant restarts, integration reloads and integration updates.
 
 ## Entities
 

@@ -30,7 +30,6 @@ from homeassistant.util import dt as dt_util
 
 from . import helper
 from .const import (
-    CHARGER_CONNECTED_STATES,
     CONF_ASSUMED_SOC,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_CHARGER_ENERGY_SENSOR,
@@ -45,6 +44,7 @@ from .const import (
     CONF_MAX_SOC,
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
+    CONF_MODE,
     CONF_SOC_ENTITY,
     CONF_SOC_STALE_HOURS,
     CONF_SPOT_PRICES_ENTITY,
@@ -155,7 +155,11 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         # post-plug-in grace window and the manual override (user runs the
         # show until charging stops or the cable is unplugged).
         self._guard = helper.ConnectionGuard()
-        self._mode: str = str(entry.data.get("mode", MODE_PLAN))
+        # Last known connection status (``True`` when nothing is known yet):
+        # a transient ``unknown``/``unavailable`` charger-mode read keeps this
+        # instead of flipping to "not connected".
+        self._last_connected: bool = True
+        self._mode: str = str(entry.data.get(CONF_MODE, MODE_PLAN))
         self._boundary_timer: Optional[CALLBACK_TYPE] = None
         self._last_full_charge: Optional[datetime] = self._parse_ts(
             entry.data.get(CONF_LAST_FULL_CHARGE)
@@ -461,6 +465,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             # never leak in, and an unknown guard state keeps hands off.
             self._guard = helper.connection_guard_reset_on_mode()
         self._mode = mode
+        self._persist_mode(mode)
         await self.async_request_refresh()
 
     def _entity_ids(self) -> list[str]:
@@ -808,14 +813,29 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         return value
 
     def _is_connected(self, entity_id: str) -> bool:
-        """Map the charger mode sensor to a boolean 'connected'."""
+        """Map the charger mode sensor to a boolean 'connected'.
+
+        - No sensor configured, or the entity not (yet) in the state
+          machine: assume connected (unchanged behaviour — the same
+          optimism the planner has always relied on).
+        - ``unknown`` / ``unavailable`` / empty (a transient read gap):
+          keep the last known value — a glitch must not turn a running
+          Live charge into a stop.
+        - Otherwise: cable in (``connected_requesting`` /
+          ``connected_charging`` / ``connected_finished``) is connected;
+          anything else (``disconnected``, errors, ...) is not.
+        """
         if not entity_id:
-            # No charger mode sensor configured: assume connected.
             return True
-        state = self.hass.states.get(entity_id)
-        if state is None:
+        if self.hass.states.get(entity_id) is None:
             return True
-        return state.state in CHARGER_CONNECTED_STATES
+        mapping = helper.connected_from_mode_state(
+            self._charger_mode_state(entity_id)
+        )
+        if mapping is None:
+            return self._last_connected
+        self._last_connected = mapping
+        return mapping
 
     def _day_prices(self, entity_id: str) -> list[helper.DayPrice]:
         """Best-effort per-day price summaries from the ``days`` attribute."""
@@ -914,6 +934,24 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             self.hass.config_entries.async_update_entry(self._entry, data=data)
         )
 
+    def _persist_mode(self, mode: str) -> None:
+        """Remember the operating mode across restarts (memory + config entry).
+
+        Without this the choice made in the UI (e.g. Live) would be lost on
+        every HA restart / integration reload / HACS update: the coordinator
+        is rebuilt from ``entry.data`` and would silently fall back to Plan
+        mode, leaving the car's auto-start outside the plan unstopped. There
+        is no config-entry update listener registered, so this write causes
+        no reload of its own — it is a plain persistence save.
+        """
+        if self._entry.data.get(CONF_MODE) == mode:
+            return
+        data = dict(self._entry.data)
+        data[CONF_MODE] = mode
+        self.hass.async_create_task(
+            self.hass.config_entries.async_update_entry(self._entry, data=data)
+        )
+
     # ------------------------------------------------------------------
     # Live actions & logbook
     # ------------------------------------------------------------------
@@ -980,8 +1018,17 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             )
 
     async def _maybe_act(self, plan: helper.Plan) -> None:
-        """In Live mode, drive the charger toward the desired next action."""
+        """In Live mode, drive the charger toward the desired next action.
+
+        The plan itself is always built (every mode previews it), so this is
+        the single safety gate for writes: a car that does not report as
+        connected never sees a ``turn_on``/``turn_off``/``press`` — the plan
+        simply previews until the cable goes in.
+        """
         if self._mode != MODE_LIVE:
+            return
+        opts = self.options
+        if not self._is_connected(opts.get(CONF_CHARGER_MODE_SENSOR, "")):
             return
         na = plan.next_action
         if na is None:
@@ -1026,7 +1073,6 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             return
         self._last_action_signature = signature
 
-        opts = self.options
         op_mode_entity = opts.get(CONF_CHARGER_OPERATION_MODE, "")
         resume_button = opts.get(CONF_CHARGER_RESUME_BUTTON, "")
 

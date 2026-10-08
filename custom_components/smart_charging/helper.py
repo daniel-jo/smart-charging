@@ -58,6 +58,24 @@ PLUGGED_STATES = frozenset(
 )
 CHARGING_STATES = frozenset({"connected_charging"})
 
+
+def connected_from_mode_state(mode_state: Optional[str]) -> Optional[bool]:
+    """Connected tri-state from a raw charger-mode value.
+
+    ``None`` means "no reliable reading" (a missing sensor, ``unknown``,
+    ``unavailable`` or an empty value) — callers must keep their last known
+    value instead of treating a read gap as "unplugged". Cable-in states
+    (``connected_requesting`` / ``connected_charging`` /
+    ``connected_finished``) are connected; everything else (``disconnected``,
+    errors, ...) is not.
+    """
+    if mode_state is None:
+        return None
+    value = mode_state.strip().lower()
+    if value in ("", "unknown", "unavailable"):
+        return None
+    return value in PLUGGED_STATES
+
 # Plug-in guard actions (see ``connection_guard_step``).
 GUARD_NONE = "none"
 GUARD_STOP = "stop"
@@ -403,14 +421,11 @@ def compute_plan(
         plan.next_action = NextAction(action="none", reason="off")
         return plan
 
-    # A plan is pure information — only Live mode is allowed to write to the
-    # charger, so every other mode may preview the plan even when the car is
-    # not connected. Live keeps the guard so it never acts on a detached car.
-    if not connected and mode == _MODE_LIVE:
-        plan = _plan()
-        plan.summary = "Ej inkopplad"
-        plan.next_action = NextAction(action="stop", reason="disconnected")
-        return plan
+    # The plan is pure information and is always built (every mode previews
+    # it) — even when the car is not connected. Protecting a detached car
+    # from writes is the dispatcher's job (``_maybe_act``), never the
+    # planner's: a disconnected car in Live gets its sessions and calendar
+    # events, but its ``next_action`` is neutralised below.
 
     if not price_hours:
         plan = _plan()
@@ -757,6 +772,14 @@ def compute_plan(
     # which the greedy walk mutates).
     if soc_source == "assumed" and soc_now is not None:
         prefix = f"Antagen {soc_now:.0f} %"
+        plan.summary = f"{prefix} — {plan.summary}" if plan.summary else prefix
+
+    # Live + a detached car: nothing may be executed, but the plan is still
+    # information — keep the sessions/calendar and only neutralise the action.
+    # The write gate itself lives in the dispatcher (``_maybe_act``).
+    if mode == _MODE_LIVE and not connected:
+        plan.next_action = NextAction(action="none", reason="disconnected")
+        prefix = "Ej inkopplad"
         plan.summary = f"{prefix} — {plan.summary}" if plan.summary else prefix
 
     return plan

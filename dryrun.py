@@ -113,13 +113,13 @@ def main() -> int:
         "--mode", type=_mode, default=helper._MODE_PLAN, help="off | plan | live"
     )
     parser.add_argument(
-        "--soc", type=float, default=None, help="Battery level (%) (omit: unknown)"
+        "--soc", type=float, default=None, help="Battery level (%%) (omit: unknown)"
     )
     parser.add_argument(
         "--assumed-soc",
         type=float,
         default=50.0,
-        help="Assumed level (%) when --soc is omitted (preview of the fallback)",
+        help="Assumed level (%%) when --soc is omitted (preview of the fallback)",
     )
     parser.add_argument(
         "--soc-age-hours",
@@ -128,27 +128,27 @@ def main() -> int:
         help="Treat --soc as this many hours old and project it through the "
         "away-window (preview of the remembered-SOC fallback)",
     )
-    parser.add_argument("--min-soc", type=float, default=20.0, help="Battery floor (%)")
+    parser.add_argument("--min-soc", type=float, default=20.0, help="Battery floor (%%)")
     parser.add_argument(
-        "--max-soc", type=float, default=80.0, help="Normal charge target (%)"
+        "--max-soc", type=float, default=80.0, help="Normal charge target (%%)"
     )
     parser.add_argument(
         "--capacity-kwh", type=float, default=77.0, help="Battery capacity (kWh)"
     )
     parser.add_argument(
-        "--daily-consumption-pct", type=float, default=15.0, help="Daily use (%/day)"
+        "--daily-consumption-pct", type=float, default=15.0, help="Daily use (%%/day)"
     )
     parser.add_argument(
         "--charger-max-kw", type=float, default=11.0, help="Max charger power (kW)"
     )
     parser.add_argument(
-        "--weekly-full", action="store_true", help="Allow the weekly 100 % boost"
+        "--weekly-full", action="store_true", help="Allow the weekly 100 %% boost"
     )
     parser.add_argument(
-        "--min-days-between-full", type=float, default=5.0, help="100 % cooldown (d)"
+        "--min-days-between-full", type=float, default=5.0, help="100 %% cooldown (d)"
     )
     parser.add_argument(
-        "--last-full-charge", type=str, default="", help="ISO time of last 100 % charge"
+        "--last-full-charge", type=str, default="", help="ISO time of last 100 %% charge"
     )
     parser.add_argument("--currency", type=str, default="SEK")
     parser.add_argument(

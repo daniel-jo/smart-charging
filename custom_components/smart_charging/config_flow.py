@@ -36,6 +36,7 @@ from .const import (
     CONF_MAX_SOC,
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
+    CONF_MODE,
     CONF_SOC_ENTITY,
     CONF_ASSUMED_SOC,
     CONF_SOC_STALE_HOURS,
@@ -65,12 +66,10 @@ from .const import (
 
 # OptionsFlowWithReload only exists on Home Assistant >= 2025.9; fall back to
 # the plain OptionsFlow on older core so the integration always imports.
+# (The operating-mode key lives in ``const`` as ``CONF_MODE``.)
 _OptionsFlowBase = getattr(
     config_entries, "OptionsFlowWithReload", config_entries.OptionsFlow
 )
-
-CONF_MODE = "mode"
-
 
 def _auto_detect_spot_prices(entity_ids: list[str]) -> Optional[str]:
     matches = [

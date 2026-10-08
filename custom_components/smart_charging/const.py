@@ -18,6 +18,7 @@ MODE_LABELS = {
 }
 
 # --- config keys ------------------------------------------------------------
+CONF_MODE = "mode"  # persisted operating mode (off / plan / live)
 CONF_SPOT_PRICES_ENTITY = "spot_prices_entity"
 CONF_SOC_ENTITY = "soc_entity"
 CONF_CHARGER_OPERATION_MODE = "charger_operation_mode_entity"
@@ -70,12 +71,15 @@ DEFAULT_ASSUMED_SOC = 50.0
 # How often the live energy sensor is sampled while charging is active.
 DEFAULT_STATS_SAMPLE_SECONDS = 60
 
-# --- charger_mode sensor states that mean "connected" -----------------------
+# --- charger_mode sensor states ------------------------------------------------
 # The zaptec sensor.*_charger_mode uses the native Zaptec values in lower
 # case (Zaptec integration >= 0.8):
 #   disconnected, connected_requesting, connected_charging,
 #   connected_finished, unknown, ...
-CHARGER_CONNECTED_STATES = {"connected_requesting", "connected_charging"}
+# The mapping to a boolean lives in ``helper.connected_from_mode_state`` —
+# cable in (``connected_requesting`` / ``connected_charging`` /
+# ``connected_finished``) counts as connected; ``unknown`` / ``unavailable``
+# keep the last known value instead of flipping to "not connected".
 
 # --- plug-in guard (Live) ----------------------------------------------------
 # Grace (seconds) after a plug-in edge (disconnected -> plugged) during which
