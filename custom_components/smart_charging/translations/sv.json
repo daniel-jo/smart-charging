@@ -30,7 +30,8 @@
           "usage_away_start": "Brukar vara borta från",
           "usage_away_end": "Brukar vara borta till",
           "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling",
-          "soc_stale_hours": "Använd senast kända batterinivå i upp till (timmar) när bilen inte rapporterar SOC"
+          "soc_stale_hours": "Använd senast kända batterinivå i upp till (timmar) när bilen inte rapporterar SOC",
+          "assumed_soc": "Antagen batterinivå (%) när SOC är helt okänd"
         }
       }
     },
@@ -70,7 +71,8 @@
           "usage_away_start": "Brukar vara borta från",
           "usage_away_end": "Brukar vara borta till",
           "daily_consumption_pct": "Daglig förbrukning (%), t.ex. dagspendling",
-          "soc_stale_hours": "Använd senast kända batterinivå i upp till (timmar) när bilen inte rapporterar SOC"
+          "soc_stale_hours": "Använd senast kända batterinivå i upp till (timmar) när bilen inte rapporterar SOC",
+          "assumed_soc": "Antagen batterinivå (%) när SOC är helt okänd"
         }
       }
     },

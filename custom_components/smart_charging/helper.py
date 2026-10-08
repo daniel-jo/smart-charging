@@ -100,7 +100,8 @@ class Plan:
     currency: str = "SEK"
     # Battery state the plan was built from (exposed as sensor attributes).
     soc_now: Optional[float] = None
-    # Where ``soc_now`` came from: "sensor" | "remembered" | "projected" | "none".
+    # Where ``soc_now`` came from:
+    # "sensor" | "remembered" | "projected" | "assumed" | "none".
     soc_source: str = "sensor"
     min_soc: float = 0.0
     max_soc: float = 100.0
@@ -253,7 +254,8 @@ def compute_plan(
         forward through the away-window) so the plan survives commuting gaps.
     soc_source
         Where ``soc_now`` came from: ``"sensor"`` | ``"remembered"`` |
-        ``"projected"``. Exposed as a sensor attribute for transparency.
+        ``"projected"`` | ``"assumed"`` (last-resort configured guess).
+        Exposed as a sensor attribute for transparency.
     min_soc
         Battery floor (percent). The plan never lets the projected SOC drop
         below this — charging is forced when needed.
@@ -619,6 +621,13 @@ def compute_plan(
             until = usage_next.strftime("%H:%M") if usage_next is not None else ""
             prefix = f"Borta t.o.m. {until}" if until else "Borta"
             plan.summary = f"{prefix} — {plan.summary}" if plan.summary else prefix
+
+    # Assumed level: make the guess visible in the state itself, next to the
+    # "Borta t.o.m." prefix above. Uses the starting soc_now (not `soc`,
+    # which the greedy walk mutates).
+    if soc_source == "assumed" and soc_now is not None:
+        prefix = f"Antagen {soc_now:.0f} %"
+        plan.summary = f"{prefix} — {plan.summary}" if plan.summary else prefix
 
     return plan
 

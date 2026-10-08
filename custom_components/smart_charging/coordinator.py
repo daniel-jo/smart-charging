@@ -31,6 +31,7 @@ from homeassistant.util import dt as dt_util
 from . import helper
 from .const import (
     CHARGER_CONNECTED_STATES,
+    CONF_ASSUMED_SOC,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_CHARGER_ENERGY_SENSOR,
     CONF_CHARGER_MAX_KW,
@@ -52,6 +53,7 @@ from .const import (
     CONF_USAGE_DAYS,
     CONF_USAGE_ENABLED,
     CONF_WEEKLY_FULL_CHARGE,
+    DEFAULT_ASSUMED_SOC,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_CHARGER_MAX_KW,
     DEFAULT_CURRENCY,
@@ -348,8 +350,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         else:
             # No fresh reading (car away / sensor offline): fall back to the
             # last known SOC, projected through the away-window, so the plan
-            # survives the daily commute. Never usable without any reading.
+            # survives the daily commute.
             soc_now, soc_source = self._remembered_soc(opts, usage_tz)
+            if soc_now is None:
+                # No SOC was ever seen (or it expired): assume a level so a
+                # plan is produced immediately instead of "Ingen SOC-data".
+                # A real reading always wins as soon as it appears.
+                soc_now, soc_source = self._assumed_soc(opts)
         currency = str(opts.get(CONF_CURRENCY, DEFAULT_CURRENCY))
 
         plan = helper.compute_plan(
@@ -826,6 +833,20 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         )
         source = "remembered" if projected >= self._last_soc - 1e-9 else "projected"
         return projected, source
+
+    @staticmethod
+    def _assumed_soc(opts: dict) -> tuple[Optional[float], str]:
+        """Last-resort SOC so a plan is produced even when nothing is known.
+
+        Uses the configured ``assumed_soc`` (default 50 %) — a guess, not a
+        measurement — so the plan is never left at "Ingen SOC-data". Always
+        replaced by a fresh or remembered reading as soon as one exists.
+        Returns ``(None, "none")`` only when the option itself is unusable.
+        """
+        value = _as_float(opts.get(CONF_ASSUMED_SOC, DEFAULT_ASSUMED_SOC), float("nan"))
+        if value != value or value < 0 or value > 100:  # NaN or out of range
+            return None, "none"
+        return value, "assumed"
 
     @staticmethod
     def _parse_ts(value: Any) -> Optional[datetime]:

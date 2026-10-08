@@ -772,6 +772,30 @@ def test_no_valid_soc_ever_still_no_soc():
 
 
 # ---------------------------------------------------------------------------
+# Assumed SOC (last-resort fallback when nothing is known at all)
+# ---------------------------------------------------------------------------
+
+
+def test_assumed_soc_produces_plan():
+    plan = _cp(
+        price_hours=_day_night_prices(days=2), soc_now=50.0, soc_source="assumed"
+    )
+    assert plan.sessions
+    assert plan.soc_now == 50.0
+    assert plan.soc_source == "assumed"
+    assert plan.summary.startswith("Antagen 50 %")
+
+
+def test_assumed_soc_above_target_gives_no_charge():
+    plan = _cp(
+        price_hours=_day_night_prices(days=2), soc_now=95.0, soc_source="assumed"
+    )
+    assert plan.sessions == []
+    assert "Redan laddad" in plan.summary
+    assert plan.soc_source == "assumed"
+
+
+# ---------------------------------------------------------------------------
 # Run standalone
 # ---------------------------------------------------------------------------
 

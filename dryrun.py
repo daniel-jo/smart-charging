@@ -112,7 +112,15 @@ def main() -> int:
     parser.add_argument(
         "--mode", type=_mode, default=helper._MODE_PLAN, help="off | plan | live"
     )
-    parser.add_argument("--soc", type=float, default=60.0, help="Battery level (%)")
+    parser.add_argument(
+        "--soc", type=float, default=None, help="Battery level (%) (omit: unknown)"
+    )
+    parser.add_argument(
+        "--assumed-soc",
+        type=float,
+        default=50.0,
+        help="Assumed level (%) when --soc is omitted (preview of the fallback)",
+    )
     parser.add_argument(
         "--soc-age-hours",
         type=float,
@@ -204,8 +212,10 @@ def main() -> int:
     last_full = _parse_iso(args.last_full_charge) if args.last_full_charge else None
 
     soc_now = args.soc
-    soc_source = "sensor"
-    if args.soc_age_hours and args.soc_age_hours > 0:
+    soc_source = "sensor" if soc_now is not None else "assumed"
+    if soc_now is None:
+        soc_now = args.assumed_soc
+    if args.soc is not None and args.soc_age_hours and args.soc_age_hours > 0:
         soc_now = helper.project_soc(
             args.soc,
             now - timedelta(hours=args.soc_age_hours),

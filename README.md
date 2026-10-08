@@ -79,6 +79,7 @@ hacs.json                           HACS metadata
 | Usually away from / until | The window the car is normally gone — the **from** time is the new ready-by |
 | Daily battery use (%/day) | Average daily consumption (e.g. 15); spread over the away hours only |
 | Use last known battery level (h) | Max age of a remembered SOC (default 12): the plan survives while the car reports no SOC |
+| Assumed battery level (%) | Last resort (default 50): used when no SOC is known at all — a plan is always produced |
 
 ### Continuous usage (optional)
 
@@ -110,8 +111,12 @@ intact during the daily commute. The new `soc_source` attribute on
 `sensor.smart_charging_plan` tells you where the value came from: `sensor`,
 `remembered` (unchanged) or `projected` (drained through the away-window).
 
-- The reading expires after **Use last known battery level (h)** (default 12 h);
-  with no fresh *and* no recent reading the plan still fails safe (`stop`).
+- The reading expires after **Use last known battery level (h)** (default 12 h).
+- When **no SOC was ever seen** (fresh start, sensor never reporting) the
+  **Assumed battery level** (default 50 %) is used instead — a guess, not a
+  measurement — so a plan is *always* produced in both Plan and Live mode.
+  The summary is then prefixed `Antagen N %` and `soc_source` is `"assumed"`;
+  a real reading replaces it as soon as it appears.
 - The weekly-100 % detection and the measured Live statistics always use the
   fresh sensor reading — only the *planning* input falls back.
 
