@@ -13,6 +13,10 @@ thresholds:
 - ``min_soc`` (``%``) — floor: the plan never lets the *projected* SOC go
   below this. If the battery would run dry before a cheap window, charging is
   forced at the cheapest hour within the survival window (floor forcing).
+  With continuous usage the car may arrive home already *below* the floor;
+  then the cheapest hours before the next departure (away-window leave time)
+  restore the floor instead of forcing the expensive current hour. Without a
+  known departure the floor is protected ASAP.
 - ``max_soc`` (``%``) — normal upper target. Regular charging stops here,
   even mid-window (no overcharging to battery-healthy levels).
 - ``daily_consumption_pct`` (``%/day``) — average battery use (e.g. the daily
@@ -231,6 +235,56 @@ def _parse_time_of_day(value: Optional[str]) -> Optional[tuple[int, int]]:
     return (hour, minute)
 
 
+def _floor_recovery_indices(
+    *,
+    soc_now: float,
+    floor: float,
+    rate: float,
+    future: list[PriceHour],
+    charge_frac: list[float],
+    departure: Optional[datetime],
+) -> Optional[list[int]]:
+    """Cheapest chargeable hours that restore the floor before ``departure``.
+
+    When the car arrives home already *below* the floor with a known next
+    departure (continuous usage), charging the expensive current hour makes
+    no sense — the battery is already below the floor, and waiting changes
+    nothing about that. Instead pick the cheapest home hours ahead of the
+    departure so the projected level is back at (at most) the floor when the
+    car leaves.
+
+    Returns the hour indices (by price, cheapest first) whose accumulated
+    ``rate * charge_frac`` covers ``floor - soc_now``, or ``None`` when no
+    chargeable home hours fit ahead of ``departure`` — only then does the
+    caller fall back to protecting the floor ASAP.
+    """
+    if departure is None or rate <= 0:
+        return None
+    need = floor - soc_now
+    if need <= 0:
+        return None
+    ranked = sorted(
+        (
+            i
+            for i, h in enumerate(future)
+            if h.start < departure and charge_frac[i] > 1e-9
+        ),
+        key=lambda k: (future[k].price_kwh, future[k].start),
+    )
+    if not ranked:
+        return None
+    picked: list[int] = []
+    acc = 0.0
+    for k in ranked:
+        picked.append(k)
+        acc += rate * charge_frac[k]
+        if acc + 1e-9 >= need:
+            break
+    if acc + 1e-9 < need:
+        return None
+    return picked
+
+
 def compute_plan(
     *,
     price_hours: list[PriceHour],
@@ -278,7 +332,11 @@ def compute_plan(
         Exposed as a sensor attribute for transparency.
     min_soc
         Battery floor (percent). The plan never lets the projected SOC drop
-        below this — charging is forced when needed.
+        below this — charging is forced when needed. When continuous usage
+        places the floor at a known next departure and the car already sits
+        below the floor at home, the cheapest chargeable hours before that
+        departure restore it (see ``_floor_recovery_indices``); without such
+        a recovery window it is protected ASAP.
     max_soc
         Normal upper target (percent). Regular charging stops here.
     daily_consumption_pct
@@ -496,13 +554,55 @@ def compute_plan(
         {future[i].start for i in boost_range} if boost_range is not None else set()
     )
 
+    # --- Floor recovery for a below-floor arrival (continuous usage only) ---
+    # The car may come home from work already below the floor (e.g. 24 % with
+    # a 35 % floor). The generic floor forcing below would then collapse its
+    # survival window to zero and charge the expensive current hour — even
+    # though waiting changes nothing (the battery is already below the
+    # floor). When the next departure is known, recover the floor at the
+    # cheapest chargeable hours ahead of it instead. Without a known
+    # departure (usage off) the floor keeps its ASAP protection.
+    departure: Optional[datetime] = None
+    if usage_enabled and away_minutes > 0 and usage_next is not None:
+        home_tz = usage_timezone if usage_timezone is not None else timezone.utc
+        if not _usage_is_away(
+            now, home_tz, usage_days, away_start_min, away_end_min
+        ):
+            departure = usage_next
+    floor_recovery: Optional[list[int]] = None
+    if (
+        usage_enabled
+        and away_minutes > 0
+        and departure is not None
+        and rate > 0
+        and soc < floor - 1e-9
+        and charge_frac
+        and charge_frac[0] > 1e-9
+    ):
+        floor_recovery = _floor_recovery_indices(
+            soc_now=soc,
+            floor=floor,
+            rate=rate,
+            future=future,
+            charge_frac=charge_frac,
+            departure=departure,
+        )
+    floor_starts = (
+        {future[i].start for i in floor_recovery}
+        if floor_recovery is not None
+        else set()
+    )
+
 
     # --- Chronological greedy ------------------------------------------------
     # Walk the forecast hour by hour. Charge when:
     #   1. it is a boost hour (mandatory, capped at 100 %) and the car is home;
-    #   2. the hour is cheap (<= auto cheap_cut), the car is home and the battery
+    #   2. it is a floor-recovery hour (mandatory, capped at max_soc) and the
+    #      car is home — the battery arrived below the floor, so the cheapest
+    #      hours before the next departure restore it;
+    #   3. the hour is cheap (<= auto cheap_cut), the car is home and the battery
     #      is below the normal cap (top-up, capped at max_soc);
-    #   3. the floor is threatened before a chargeable hour is available — then
+    #   4. the floor is threatened before a chargeable hour is available — then
     #      buy the cheapest chargeable hour inside the survival window (floor
     #      forcing), even if that hour is not "cheap".
     selected: list[PriceHour] = []
@@ -523,10 +623,13 @@ def compute_plan(
     while i < n:
         hour = future[i]
         is_boost_hour = hour.start in boost_starts
+        is_floor_hour = hour.start in floor_starts
         session_cap = 100.0 if is_boost_hour else cap
 
         if charge_frac[i] > 1e-9 and (
-            is_boost_hour or (hour.price_kwh <= cheap_cut and soc < session_cap)
+            is_boost_hour
+            or is_floor_hour
+            or (hour.price_kwh <= cheap_cut and soc < session_cap)
         ):
             _charge_hour(hour, session_cap, charge_frac[i])
             i += 1
@@ -534,8 +637,15 @@ def compute_plan(
 
         # Not charging this hour. Skip it — unless the floor would be breached
         # before any chargeable hour is available (the car may be away).
+        # Below the floor while a recovery window stands, the recovery hours
+        # above already cover the floor — forcing `now` would only buy an
+        # expensive hour for no reason.
+        floor_recovery_pending = (
+            floor_recovery is not None and soc < floor - 1e-9
+        )
         if (
             soc < session_cap
+            and not floor_recovery_pending
             and drain_cum[i] < drain_cum[n]
             and drain_cum[n] - drain_cum[i] > (soc - floor) + 1e-9
         ):

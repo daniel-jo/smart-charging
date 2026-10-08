@@ -603,6 +603,96 @@ def test_accrue_plan_hours_uses_day_reference_price():
 # ---------------------------------------------------------------------------
 
 
+def test_below_floor_arrival_usage_waits_for_cheap_hours():
+    """24 % home under a 35 % floor: wait for the cheap night, not now.
+
+    With continuous usage the next departure is a known ready-by, so the
+    plan must restore the floor ahead of it (the cheap night) instead of
+    forcing the expensive arrival hour.
+    """
+    plan = _cp(
+        price_hours=_day_night_prices(days=2),
+        soc_now=24.0,
+        min_soc=35.0,
+        max_soc=80.0,
+        daily_consumption_pct=15.0,
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:00",
+        usage_away_end="16:00",
+        usage_timezone=UTC,
+        now=_now(16),
+    )
+    assert plan.sessions
+    assert plan.sessions[0].start == BASE + timedelta(hours=22)
+    assert plan.sessions[0].start.hour == 22
+    assert plan.next_action.action == "resume"
+    assert plan.next_action.at == BASE + timedelta(hours=22)
+
+    # Simulate the trajectory: SOC back at/above the floor by the departure.
+    selected = {
+        h["start"]: h["duration_hours"]
+        for s in plan.sessions
+        for h in s.hours
+    }
+    departure = BASE + timedelta(days=1, hours=7)
+    soc = 24.0
+    for h in range(16, 31):
+        start = BASE + timedelta(hours=h)
+        if start in selected:
+            frac = selected[start]
+            soc = min(80.0, soc + RATE * frac)
+        elif 7 <= start.hour < 16:
+            soc -= 15.0 / 9.0
+    assert soc >= 35.0 - EPSILON
+
+
+def test_below_floor_arrival_without_usage_charges_now():
+    """Without a known departure (usage off) the floor keeps ASAP cover."""
+    plan = _cp(
+        price_hours=_day_night_prices(days=2),
+        soc_now=24.0,
+        min_soc=35.0,
+        max_soc=80.0,
+        daily_consumption_pct=15.0,
+        usage_enabled=False,
+        now=_now(16),
+    )
+    assert plan.sessions
+    assert plan.sessions[0].start == BASE + timedelta(hours=16)
+
+
+def test_below_floor_all_expensive_before_departure():
+    """Only expensive home hours ahead of the departure: restore the floor.
+
+    The cheapest home hours before the departure must still be bought, even
+    though every one of them is expensive.
+    """
+    prices = [1.9 - 0.01 * h for h in range(24)] + [1.2] * 24
+    plan = _cp(
+        price_hours=_pts(list(enumerate(prices))),
+        soc_now=24.0,
+        min_soc=35.0,
+        max_soc=80.0,
+        daily_consumption_pct=15.0,
+        usage_enabled=True,
+        usage_days="weekdays",
+        usage_away_start="07:00",
+        usage_away_end="16:00",
+        usage_timezone=UTC,
+        now=_now(16),
+    )
+    assert plan.sessions
+    # Home until the 07:00 departure; the expensive evening hours are the
+    # only recovery candidates, so the plan must start while still home.
+    departure = BASE + timedelta(days=1, hours=7)
+    assert plan.sessions[0].start < departure
+    # No charging may ever be scheduled inside the away window itself.
+    for s in plan.sessions:
+        for h in s.hours:
+            assert not (7 <= h["start"].hour < 16 and h["start"].date() >= BASE.date())
+
+
 def test_usage_no_charging_while_away():
     """While the car is away the plan must never schedule charging."""
     plan = _cp(
