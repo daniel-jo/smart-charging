@@ -9,6 +9,7 @@
           "soc_entity": "Bilens batterinivå-sensor (0-100 %)",
           "car_charge_switch_entity": "Bilens laddbrytare (starta/stoppa laddning)",
           "car_charging_sensor_entity": "Bilens laddtillstånd-sensor (identitet + plug-in-kant)",
+            "plug_sensor_entity": "Laddkabel-sensor (fallback för inkopplad, valfritt)",
           "charger_mode_sensor_entity": "Hemmaladdarens läge-sensor (hemma + inkopplad-grind)",
           "charger_energy_sensor_entity": "Laddenergi-sensor (kWh, valfritt) - för live-statistik"
         }
@@ -48,6 +49,7 @@
           "spot_prices_entity": "Spotpris-prognos-sensor",
           "soc_entity": "Bilens batterinivå-sensor (0-100 %)",
           "car_charge_switch_entity": "Bilens laddbrytare (starta/stoppa laddning)",
+            "plug_sensor_entity": "Laddkabel-sensor (fallback för inkopplad, valfritt)",
           "car_charging_sensor_entity": "Bilens laddtillstånd-sensor (identitet + plug-in-kant)",
           "charger_mode_sensor_entity": "Hemmaladdarens läge-sensor (hemma + inkopplad-grind)",
           "charger_energy_sensor_entity": "Laddenergi-sensor (kWh, valfritt) - för live-statistik"

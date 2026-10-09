@@ -106,6 +106,38 @@ def connected_from_mode_state(mode_state: Optional[str]) -> Optional[bool]:
         return None
     return value in PLUGGED_STATES
 
+
+def plugged_from_cable_state(state: Optional[str]) -> Optional[bool]:
+    """Cable-in state from a charging-cable sensor, or ``None``.
+
+    The optional plug fallback (e.g. Tesla Fleet's
+    ``binary_sensor.<car>_laddningskabel``, device_class connectivity) reports
+    the physical cable: on means the cable is in, off means it is out.
+    ``None`` covers "not configured", a missing entity, ``unknown`` /
+    ``unavailable`` and anything unrecognized — callers must keep their last
+    known value instead of treating a read gap as "unplugged".
+    """
+    if state is None:
+        return None
+    value = state.strip().lower()
+    if value in ("on", "true", "1", "yes", "ja"):
+        return True
+    if value in ("off", "false", "0", "no", "nej"):
+        return False
+    return None
+
+
+def plug_fallback_state(plugged: bool) -> str:
+    """Canonical guard state for a known cable reading (sensor-gap fill).
+
+    Lets the plug-in guard register plug-in edges while the car's own
+    charging sensor is ``unknown``/``unavailable``: a cable-in reading becomes
+    an idle-but-plugged state (never "charging" — only the car sensor can
+    confirm that, so the fallback alone can never stop).
+    """
+    return "connected_finished" if plugged else "disconnected"
+
+
 # Plug-in guard actions (see ``connection_guard_step``).
 GUARD_NONE = "none"
 GUARD_STOP = "stop"
@@ -846,6 +878,7 @@ class ConnectionGuard:
     """Live plug-in guard state, carried across recomputes by the coordinator."""
 
     prev_mode_state: Optional[str] = None  # last seen raw charger-mode value
+    prev_plugged: Optional[bool] = None  # last known cable-in state
     plug_in_at: Optional[datetime] = None  # start of the current grace window
     manual_override: bool = False  # user runs the show until stop/unplug
 
@@ -855,6 +888,7 @@ class ConnectionGuardStep:
     """One guard evaluation: action + the state the coordinator must keep."""
 
     action: str  # GUARD_NONE | GUARD_STOP
+    plugged: Optional[bool]  # effective cable-in state after this step
     plug_in_at: Optional[datetime] = None
     manual_override: bool = False
 
@@ -868,6 +902,8 @@ def connection_guard_step(
     plug_in_at: Optional[datetime],
     manual_override: bool,
     grace_seconds: float = PLUG_IN_GRACE_SECONDS,
+    plugged_now: Optional[bool] = None,
+    prev_plugged: Optional[bool] = None,
 ) -> ConnectionGuardStep:
     """Decide whether to stop an out-of-window charge.
 
@@ -879,42 +915,64 @@ def connection_guard_step(
     observation: set a baseline, never act. ``in_session`` is True while a
     planned session covers the current moment. Never issues ``GUARD_STOP``
     for charging that is already covered by the plan.
-    """
-    plugged = mode_state in PLUGGED_STATES
 
-    # First observation ever (HA start/restart): set a baseline, never act.
-    if prev_mode_state is None:
-        return ConnectionGuardStep(GUARD_NONE, None, False)
+    ``plugged_now`` is the optional plug fallback (a cable sensor, e.g. a
+    charging-cable binary_sensor): a known cable reading is the effective
+    cable-in state when the car sensor is missing or unknown, so plug-in
+    edges survive gaps. When the car sensor is merely unknown, only the
+    edge is refreshed — charging is never confirmed by the fallback alone,
+    so ``GUARD_STOP`` needs a real ``connected_charging`` reading.
+    ``prev_plugged`` is the last effective cable-in state; it starts as
+    ``None`` (unknown) and is kept whenever both sources are unknown.
+    """
+    sensor_plugged = mode_state in PLUGGED_STATES if mode_state else None
+    plugged = plugged_now if plugged_now is not None else sensor_plugged
+    charging = bool(mode_state) and mode_state in CHARGING_STATES
+
+    # Previous effective cable state: prefer the bool, fall back to the
+    # legacy string baseline for callers that only track prev_mode_state.
+    if prev_plugged is not None:
+        prev: Optional[bool] = prev_plugged
+    elif prev_mode_state is None:
+        prev = None
+    else:
+        prev = prev_mode_state in PLUGGED_STATES
+
+    if plugged is None:
+        # Nothing known right now — keep the baseline, never act.
+        return ConnectionGuardStep(GUARD_NONE, prev, None, False)
+
+    if prev is None:
+        # First effective observation: baseline, never act.
+        return ConnectionGuardStep(GUARD_NONE, plugged, None, False)
 
     if not plugged:
-        # Cable out (or unknown) — control returns to the plan.
-        return ConnectionGuardStep(GUARD_NONE, None, False)
+        # Cable out — control returns to the plan.
+        return ConnectionGuardStep(GUARD_NONE, False, None, False)
 
-    if prev_mode_state not in PLUGGED_STATES:
+    if prev is False:
         # Plug-in edge: restart the grace window, hand control to the plan.
         plug_in_at = now
         manual_override = False
-
-    charging = mode_state in CHARGING_STATES
 
     if not charging:
         if manual_override:
             # The manual charge was stopped — the plan takes over again.
             manual_override = False
-        return ConnectionGuardStep(GUARD_NONE, plug_in_at, manual_override)
+        return ConnectionGuardStep(GUARD_NONE, True, plug_in_at, manual_override)
 
     if in_session or manual_override:
         # Inside a planned session, or the user runs the show: hands off.
-        return ConnectionGuardStep(GUARD_NONE, plug_in_at, manual_override)
+        return ConnectionGuardStep(GUARD_NONE, True, plug_in_at, manual_override)
 
     if plug_in_at is not None and (now - plug_in_at).total_seconds() <= (
         grace_seconds if grace_seconds > 0 else 0.0
     ):
         # Auto-start within the grace window after plug-in: stop it once.
-        return ConnectionGuardStep(GUARD_STOP, plug_in_at, False)
+        return ConnectionGuardStep(GUARD_STOP, True, plug_in_at, False)
 
     # Charging appeared long after plug-in: the user started it manually.
-    return ConnectionGuardStep(GUARD_NONE, plug_in_at, True)
+    return ConnectionGuardStep(GUARD_NONE, True, plug_in_at, True)
 
 
 def connection_guard_reset_on_mode() -> ConnectionGuard:

@@ -36,6 +36,7 @@ from .const import (
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
     CONF_MODE,
+    CONF_PLUG_SENSOR,
     CONF_SOC_ENTITY,
     CONF_ASSUMED_SOC,
     CONF_SOC_STALE_HOURS,
@@ -146,6 +147,12 @@ def _entities_schema(current: dict[str, Any]) -> vol.Schema:
                 CONF_CAR_CHARGING_SENSOR,
                 default=_entity_option(current.get(CONF_CAR_CHARGING_SENSOR, "")),
             ): selector.selector({"entity": {"domain": "sensor"}}),
+            vol.Optional(
+                CONF_PLUG_SENSOR,
+                default=_entity_option(current.get(CONF_PLUG_SENSOR, "")),
+            ): selector.selector(
+                {"entity": {"domain": ["binary_sensor", "sensor"]}}
+            ),
             vol.Optional(
                 CONF_CHARGER_MODE_SENSOR,
                 default=_entity_option(current.get(CONF_CHARGER_MODE_SENSOR, "")),
@@ -446,6 +453,7 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
                 CONF_SOC_ENTITY,
                 CONF_CAR_CHARGE_SWITCH,
                 CONF_CAR_CHARGING_SENSOR,
+                CONF_PLUG_SENSOR,
                 CONF_CHARGER_MODE_SENSOR,
                 CONF_CHARGER_ENERGY_SENSOR,
             )

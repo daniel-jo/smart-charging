@@ -23,6 +23,7 @@ CONF_SPOT_PRICES_ENTITY = "spot_prices_entity"
 CONF_SOC_ENTITY = "soc_entity"
 CONF_CAR_CHARGE_SWITCH = "car_charge_switch_entity"  # car's own on/off switch
 CONF_CAR_CHARGING_SENSOR = "car_charging_sensor_entity"  # car identity + edge
+CONF_PLUG_SENSOR = "plug_sensor_entity"  # cable-in fallback (binary_sensor/sensor)
 CONF_CHARGER_MODE_SENSOR = "charger_mode_sensor_entity"  # home + plugged gate
 CONF_CHARGER_ENERGY_SENSOR = "charger_energy_sensor_entity"
 # --- usage (continuous usage / away-window) -------------------------------------

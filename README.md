@@ -58,7 +58,9 @@ hacs.json                           HACS metadata
       (`sensor.spot_price_<AREA>_forecast`), your **car battery SOC sensor**
       (0–100 %), the **car charge switch** (`switch.<car>_charge`, start/stop),
       the **car charging state sensor** (`sensor.<car>_charging`, identity +
-      plug-in edge) and the **home charger mode sensor**
+      plug-in edge), the optional **charging cable sensor**
+      (`binary_sensor`/sensor, plug-in fallback for sleeping-car gaps) and
+      the **home charger mode sensor**
       (`sensor.*_charger_mode`, home + plugged gate).
    2. **Parameters** — set the battery limits and preferences below.
 6. The integration starts in **Planläge (test)** mode — see below.
@@ -158,7 +160,12 @@ cheap night window. The plan alone cannot stop that (before the first
 session its action is `resume`), so Live keeps a small plug-in guard:
 
 - On the **plug-in edge** (your car's charging sensor leaves
-  `disconnected`) a **120 s grace window** starts.
+  `disconnected`) a **120 s grace window** starts. If the car sensor goes
+  `unknown` / `unavailable` (e.g. a sleeping car), the optional **charging
+  cable sensor** (`binary_sensor`/sensor, e.g.
+  `binary_sensor.<car>_laddningskabel`) fills in plug-in edges: a known
+  cable reading becomes the guard's cable state, but never "charging" — only
+  the car sensor can confirm that, so the fallback alone can never stop.
 - Charging that **appears inside the grace window, outside any planned
   session**, is treated as the car's **auto-start** and is **stopped once**
   (car charge switch off, logged in the logbook).
@@ -177,9 +184,10 @@ session its action is `resume`), so Live keeps a small plug-in guard:
   plug-in edge is still detected — a sensor blip can no longer turn a
   plug-in auto-start into an untouchable "manual" charge.
 - Without a configured car charging sensor the guard has nothing to stand
-  on and stays hands-off (a warning is logged). Guard stops additionally
-  never fire unless the home charger reports a car — so a foreign charger
-  session (or a guest car on your box) is never stopped.
+  on and stays hands-off (a warning is logged — once the guard knows the
+  sensor exists it also warns while the reading is missing). Guard stops
+  additionally never fire unless the home charger reports a car — so a
+  foreign charger session (or a guest car on your box) is never stopped.
 
 A scheduled `resume` is additionally **never executed before its time**
 (`next_action.at`). Once the window opens the dispatcher makes sure charging

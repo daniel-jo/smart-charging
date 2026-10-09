@@ -1178,6 +1178,115 @@ def test_plug_in_guard_car_states_run_the_guard():
 
 
 # ---------------------------------------------------------------------------
+# Plug fallback (cable sensor) — plug-in edges survive car-sensor gaps
+# ---------------------------------------------------------------------------
+
+
+def test_plugged_from_cable_state_maps_on_off():
+    assert helper.plugged_from_cable_state("on") is True
+    assert helper.plugged_from_cable_state("ON") is True
+    assert helper.plugged_from_cable_state("1") is True
+    assert helper.plugged_from_cable_state("off") is False
+    assert helper.plugged_from_cable_state("0") is False
+    assert helper.plugged_from_cable_state(None) is None
+    assert helper.plugged_from_cable_state("") is None
+    assert helper.plugged_from_cable_state("unknown") is None
+    assert helper.plugged_from_cable_state("unavailable") is None
+    assert helper.plugged_from_cable_state("bogus") is None
+
+
+def test_plug_fallback_state_is_idle_only():
+    # The fallback can never confirm "charging" — only an idle plug state.
+    assert helper.plug_fallback_state(True) == "connected_finished"
+    assert helper.plug_fallback_state(False) == "disconnected"
+
+
+def test_plug_in_guard_fallback_keeps_edge_during_car_sensor_gap():
+    # Baseline: car away with a known cable reading.
+    away = _now(12)
+    base = _guard_step(
+        mode_state="disconnected",
+        prev_mode_state=None,
+        now=away,
+        in_session=False,
+        plug_in_at=None,
+        manual_override=False,
+        plugged_now=False,
+        prev_plugged=None,
+    )
+    assert base.action == helper.GUARD_NONE
+    assert base.plugged is False
+    # The car sensor goes dark while the cable goes in: the fallback
+    # registers the plug-in edge (but can never stop on its own).
+    replug = _guard_step(
+        mode_state=None,
+        prev_mode_state="disconnected",
+        now=away + timedelta(seconds=30),
+        in_session=False,
+        plug_in_at=None,
+        manual_override=False,
+        plugged_now=True,
+        prev_plugged=False,
+    )
+    assert replug.action == helper.GUARD_NONE
+    assert replug.plugged is True
+    assert replug.plug_in_at == away + timedelta(seconds=30)
+    # The car sensor returns "charging" inside the grace window: stop.
+    started = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state=replug and "connected_finished",
+        now=away + timedelta(seconds=90),
+        in_session=False,
+        plug_in_at=replug.plug_in_at,
+        manual_override=replug.manual_override,
+        plugged_now=True,
+        prev_plugged=True,
+    )
+    assert started.action == helper.GUARD_STOP
+
+
+def test_plug_in_guard_fallback_alone_never_stops():
+    # A plugged cable reading with a dark car sensor confirms the edge but
+    # never "charging" — hands off, even inside a missing grace timeout.
+    plugged = _now(12)
+    step = _guard_step(
+        mode_state=None,
+        prev_mode_state="connected_finished",
+        now=plugged,
+        in_session=False,
+        plug_in_at=plugged - timedelta(minutes=30),
+        manual_override=False,
+        plugged_now=True,
+        prev_plugged=True,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert step.plugged is True
+    assert step.manual_override is False
+
+
+def test_plug_in_guard_plug_now_false_resets_like_unplug():
+    # A cable-out fallback reading counts as unplugged even if the car
+    # sensor is stale: override and grace window are cleared.
+    step = _guard_step(
+        mode_state=None,
+        prev_mode_state="connected_charging",
+        now=_now(12),
+        in_session=False,
+        plug_in_at=_now(11),
+        manual_override=True,
+        plugged_now=False,
+        prev_plugged=True,
+    )
+    assert step.action == helper.GUARD_NONE
+    assert (step.plugged, step.plug_in_at, step.manual_override) == (
+        False,
+        None,
+        False,
+    )
+
+
+
+# ---------------------------------------------------------------------------
 # max_soc guard: never resume once the normal cap is reached
 # ---------------------------------------------------------------------------
 
