@@ -49,7 +49,7 @@ _MODE_LIVE = "live"
 # Share of the forecast hours treated as "cheap" for topping up.
 CHEAP_QUANTILE = 0.25
 
-# Charger mode sensor states (Zaptec integration >= 0.8, lower case).
+# Charger states (Zaptec-style canonical values used by the guard).
 # "plugged" means the cable is physically in — even when nothing flows
 # (e.g. a session the integration itself stopped, which typically lands on
 # ``connected_finished``). Only ``connected_charging`` means energy flows.
@@ -57,6 +57,36 @@ PLUGGED_STATES = frozenset(
     {"connected_requesting", "connected_charging", "connected_finished"}
 )
 CHARGING_STATES = frozenset({"connected_charging"})
+
+def normalize_car_charging_state(charging_state: Optional[str]) -> Optional[str]:
+    """Map the car's own charging state to the canonical guard states.
+
+    Tesla Fleet (and similar car integrations) report e.g. ``charging``,
+    ``starting``, ``stopped``, ``complete``, ``no_power`` or ``disconnected`` —
+    per-car readings that already scope the plan to one specific car. The
+    plug-in guard only understands box-shaped canonical values, so map them to
+    the same states: plugged-but-idle car values become
+    ``connected_finished`` and charging values become ``connected_charging``.
+
+    ``None`` means "no reliable reading" (missing sensor, ``unknown``,
+    ``unavailable`` or an empty value) — callers must keep their last known
+    value instead of treating a read gap as "unplugged".
+    """
+    if charging_state is None:
+        return None
+    value = charging_state.strip().lower()
+    if value in ("", "unknown", "unavailable"):
+        return None
+    mapping = {
+        "disconnected": "disconnected",
+        "stopped": "connected_finished",
+        "complete": "connected_finished",
+        "nopower": "connected_finished",
+        "no_power": "connected_finished",
+        "starting": "connected_charging",
+        "charging": "connected_charging",
+    }
+    return mapping.get(value)
 
 
 def connected_from_mode_state(mode_state: Optional[str]) -> Optional[bool]:
@@ -841,13 +871,14 @@ def connection_guard_step(
 ) -> ConnectionGuardStep:
     """Decide whether to stop an out-of-window charge.
 
-    ``mode_state`` is the raw charger-mode sensor value (lower-cased Zaptec
-    states). ``None`` (the sensor is missing or unknown) never reaches this
-    step from the coordinator — it keeps the last known state instead — so a
-    ``None`` here behaves exactly like the very first observation: set a
-    baseline, never act. ``in_session`` is True while a planned session
-    covers the current moment. Never issues ``GUARD_STOP`` for charging that
-    is already covered by the plan.
+    ``mode_state`` is the canonical charger/car state produced by either a raw
+    box-mode value or :func:`normalize_car_charging_state` applied to the
+    car's own charging state. ``None`` (the sensor is missing or unknown)
+    never reaches this step from the coordinator — it keeps the last known
+    state instead — so a ``None`` here behaves exactly like the very first
+    observation: set a baseline, never act. ``in_session`` is True while a
+    planned session covers the current moment. Never issues ``GUARD_STOP``
+    for charging that is already covered by the plan.
     """
     plugged = mode_state in PLUGGED_STATES
 

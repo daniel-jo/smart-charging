@@ -142,6 +142,33 @@ def test_connected_from_mode_state():
     assert helper.connected_from_mode_state(None) is None
 
 
+def test_normalize_car_charging_state():
+    """Car charging states map to the canonical guard states."""
+    assert helper.normalize_car_charging_state("charging") == "connected_charging"
+    assert helper.normalize_car_charging_state("Starting") == "connected_charging"
+    assert helper.normalize_car_charging_state("stopped") == "connected_finished"
+    assert helper.normalize_car_charging_state("complete") == "connected_finished"
+    assert helper.normalize_car_charging_state("NoPower") == "connected_finished"
+    assert helper.normalize_car_charging_state("disconnected") == "disconnected"
+    assert helper.normalize_car_charging_state("UNKNOWN") is None
+    assert helper.normalize_car_charging_state("unavailable") is None
+    assert helper.normalize_car_charging_state("  ") is None
+    assert helper.normalize_car_charging_state(None) is None
+    # Canonical car/box states already feed the guard shape unchanged.
+    assert (
+        helper.connected_from_mode_state(
+            helper.normalize_car_charging_state("charging")
+        )
+        is True
+    )
+    assert (
+        helper.connected_from_mode_state(
+            helper.normalize_car_charging_state("disconnected")
+        )
+        is False
+    )
+
+
 def test_disconnected_plan_mode_still_plans():
     """Planläge (test) previews the plan even without a connection.
 
@@ -1117,6 +1144,37 @@ def test_plug_in_guard_finished_counts_as_plugged_no_action():
     )
     assert step.action == helper.GUARD_NONE
     assert step.manual_override is False
+
+
+def test_plug_in_guard_car_states_run_the_guard():
+    """Normalised car states feed the same plug-in guard path.
+
+    The coordinator maps ``sensor.<car>_charging`` to the canonical states;
+    another car staying ``disconnected`` is what keeps a foreign session out
+    of the guard — the gate itself lives in the coordinator.
+    """
+    plugged = _now(12)
+    request_like = helper.normalize_car_charging_state("stopped")
+    start_like = helper.normalize_car_charging_state("charging")
+    idle = _guard_step(
+        mode_state=request_like,
+        prev_mode_state="disconnected",
+        now=plugged,
+        in_session=False,
+        plug_in_at=None,
+        manual_override=False,
+    )
+    assert idle.action == helper.GUARD_NONE
+    assert idle.plug_in_at == plugged
+    started = _guard_step(
+        mode_state=start_like,
+        prev_mode_state=request_like,
+        now=plugged + timedelta(seconds=5),
+        in_session=False,
+        plug_in_at=idle.plug_in_at,
+        manual_override=idle.manual_override,
+    )
+    assert started.action == helper.GUARD_STOP
 
 
 # ---------------------------------------------------------------------------

@@ -1,15 +1,15 @@
 """Coordinator for the Smart Charging integration.
 
 Event-driven: listens to state changes on the configured input entities
-(spot prices forecast, charger mode, mode select) plus a periodic
-tick, throttles recomputes, and updates the plan. In Live mode it calls the
-charger switch/button services when the desired next action changes.
+(spot prices forecast, car switch, car charging sensor, charger mode, mode
+select) plus a periodic tick, throttles recomputes, and updates the plan. In
+Live mode it calls the car's charge switch services when the desired next
+action changes.
 
-Only services written: switch.turn_on/off on the operation-mode entity and
-button.press on the resume/stop buttons. The integration NEVER writes
-available_current. It also registers its own ``smart_charging.reset_statistics``
-service for the accumulated statistics (Plan-mode simulation / Live-mode
-measurement).
+Only service written: switch.turn_on/off on the car's charge entity. The
+integration NEVER writes available_current. It also registers its own
+``smart_charging.reset_statistics`` service for the accumulated
+statistics (Plan-mode simulation / Live-mode measurement).
 """
 
 from __future__ import annotations
@@ -32,12 +32,11 @@ from . import helper
 from .const import (
     CONF_ASSUMED_SOC,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_CAR_CHARGE_SWITCH,
+    CONF_CAR_CHARGING_SENSOR,
     CONF_CHARGER_ENERGY_SENSOR,
     CONF_CHARGER_MAX_KW,
     CONF_CHARGER_MODE_SENSOR,
-    CONF_CHARGER_OPERATION_MODE,
-    CONF_CHARGER_RESUME_BUTTON,
-    CONF_CHARGER_STOP_BUTTON,
     CONF_CURRENCY,
     CONF_DAILY_CONSUMPTION_PCT,
     CONF_LAST_FULL_CHARGE,
@@ -111,9 +110,8 @@ def resolve_options(entry: ConfigEntry) -> dict:
     options = {
         CONF_SPOT_PRICES_ENTITY: entry.data.get(CONF_SPOT_PRICES_ENTITY, ""),
         CONF_SOC_ENTITY: entry.data.get(CONF_SOC_ENTITY, ""),
-        CONF_CHARGER_OPERATION_MODE: entry.data.get(CONF_CHARGER_OPERATION_MODE, ""),
-        CONF_CHARGER_RESUME_BUTTON: entry.data.get(CONF_CHARGER_RESUME_BUTTON, ""),
-        CONF_CHARGER_STOP_BUTTON: entry.data.get(CONF_CHARGER_STOP_BUTTON, ""),
+        CONF_CAR_CHARGE_SWITCH: entry.data.get(CONF_CAR_CHARGE_SWITCH, ""),
+        CONF_CAR_CHARGING_SENSOR: entry.data.get(CONF_CAR_CHARGING_SENSOR, ""),
         CONF_CHARGER_MODE_SENSOR: entry.data.get(CONF_CHARGER_MODE_SENSOR, ""),
         CONF_CHARGER_ENERGY_SENSOR: entry.data.get(CONF_CHARGER_ENERGY_SENSOR, ""),
         CONF_USAGE_ENABLED: entry.data.get(CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED),
@@ -166,12 +164,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         # show until charging stops or the cable is unplugged).
         self._guard = helper.ConnectionGuard()
         # Latched "warned about the sensor gap" flag: a transient
-        # ``unknown``/``unavailable`` charger-mode read keeps the guard's last
+        # ``unknown``/``unavailable`` car charging read keeps the guard's last
         # known state (so a later plug-in edge is still detected), but the
         # warning is logged only once per gap, not on every recompute.
         self._guard_gap_warned: bool = False
         # Last known connection status (``True`` when nothing is known yet):
-        # a transient ``unknown``/``unavailable`` charger-mode read keeps this
+        # a transient ``unknown``/``unavailable`` read on either the home
+        # charger's mode sensor or the car's charging sensor keeps this
         # instead of flipping to "not connected".
         self._last_connected: bool = True
         self._mode: str = str(entry.data.get(CONF_MODE, MODE_PLAN))
@@ -377,7 +376,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
 
         price_hours = self._price_hours(opts.get(CONF_SPOT_PRICES_ENTITY, ""))
         day_prices = self._day_prices(opts.get(CONF_SPOT_PRICES_ENTITY, ""))
-        connected = self._is_connected(opts.get(CONF_CHARGER_MODE_SENSOR, ""))
+        connected = self._is_connected(opts)
         usage_tz = dt_util.get_time_zone(self.hass.config.time_zone)
         if usage_tz is None:
             usage_tz = dt_util.UTC
@@ -454,8 +453,8 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         # planned window once, and let a later manual start through. Runs
         # before the regular dispatch so the guard-stop is not mixed up with
         # the plan's own next-action handling.
-        await self._enforce_plug_in_guard(plan, opts)
-        await self._maybe_act(plan)
+        await self._enforce_plug_in_guard(plan)
+        await self._maybe_act(plan, opts)
         self._schedule_boundary_timer(plan)
 
         # Remember the forecast for the off-recompute live sampling loop, then
@@ -494,10 +493,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         return [
             opts.get(CONF_SPOT_PRICES_ENTITY, ""),
             opts.get(CONF_SOC_ENTITY, ""),
+            opts.get(CONF_CAR_CHARGE_SWITCH, ""),
+            opts.get(CONF_CAR_CHARGING_SENSOR, ""),
             opts.get(CONF_CHARGER_MODE_SENSOR, ""),
-            opts.get(CONF_CHARGER_OPERATION_MODE, ""),
-            opts.get(CONF_CHARGER_RESUME_BUTTON, ""),
-            opts.get(CONF_CHARGER_STOP_BUTTON, ""),
         ]
 
     def _update_interval_minutes(self) -> int:
@@ -827,30 +825,68 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             return None
         return value
 
-    def _is_connected(self, entity_id: str) -> bool:
-        """Map the charger mode sensor to a boolean 'connected'.
+    def _car_charging_state(self, entity_id: str) -> Optional[str]:
+        """Canonical car charging state or ``None``.
 
-        - No sensor configured, or the entity not (yet) in the state
-          machine: assume connected (unchanged behaviour — the same
-          optimism the planner has always relied on).
-        - ``unknown`` / ``unavailable`` / empty (a transient read gap):
-          keep the last known value — a glitch must not turn a running
-          Live charge into a stop.
-        - Otherwise: cable in (``connected_requesting`` /
-          ``connected_charging`` / ``connected_finished``) is connected;
-          anything else (``disconnected``, errors, ...) is not.
+        Reads the car's own charging sensor (e.g. Tesla Fleet's
+        ``sensor.<car>_charging``) and maps it to the canonical guard states
+        via :func:`helper.normalize_car_charging_state`. ``None`` covers "not
+        configured", missing state, ``unknown`` and ``unavailable`` — all
+        cases where the guard has nothing to stand on and must keep the last
+        known state instead.
         """
         if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state is None:
+            return None
+        return helper.normalize_car_charging_state(str(state.state))
+
+    def _is_connected(self, opts: dict) -> bool:
+        """Home-and-connected: safe to control this car at all?
+
+        - No car charging sensor and no home mode sensor: assume connected
+          (unchanged behaviour — the same optimism the planner has always
+          relied on).
+        - Home mode sensor configured: a car on the home box means the car is
+          home and plugged; ``unknown`` / ``unavailable`` / empty (a transient
+          read gap) keeps the last known value.
+        - Car charging sensor configured: the per-car identity gate. Any car
+          plugged into the home box counts as "home"; this counts as *our*
+          car only while it reports anything but ``disconnected``. Gaps keep
+          the last known value.
+        - Anything else (``disconnected``, errors, ...) is not connected —
+          the car is away, on a foreign charger, or another car is on the
+          home box, and nothing may be written to it.
+        """
+        home_entity = opts.get(CONF_CHARGER_MODE_SENSOR, "")
+        car_entity = opts.get(CONF_CAR_CHARGING_SENSOR, "")
+        if not home_entity and not car_entity:
             return True
-        if self.hass.states.get(entity_id) is None:
+        if home_entity and self.hass.states.get(home_entity) is None:
             return True
-        mapping = helper.connected_from_mode_state(
-            self._charger_mode_state(entity_id)
-        )
-        if mapping is None:
-            return self._last_connected
-        self._last_connected = mapping
-        return mapping
+        if car_entity and self.hass.states.get(car_entity) is None:
+            return True
+        candidate = True
+        if home_entity:
+            home_mapping = helper.connected_from_mode_state(
+                self._charger_mode_state(home_entity)
+            )
+            if home_mapping is None:
+                return self._last_connected
+            candidate = home_mapping
+            if not candidate:
+                self._last_connected = False
+                return False
+        if car_entity:
+            car_mapping = helper.connected_from_mode_state(
+                self._car_charging_state(car_entity)
+            )
+            if car_mapping is None:
+                return self._last_connected
+            candidate = candidate and car_mapping
+        self._last_connected = candidate
+        return candidate
 
     def _day_prices(self, entity_id: str) -> list[helper.DayPrice]:
         """Best-effort per-day price summaries from the ``days`` attribute."""
@@ -983,22 +1019,21 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
     # Live actions & logbook
     # ------------------------------------------------------------------
     async def _press_stop(self, opts: dict) -> None:
-        """Press the stop button (+ operation switch off), shared by callers."""
-        stop_button = opts.get(CONF_CHARGER_STOP_BUTTON, "")
-        if stop_button:
-            await self.hass.services.async_call(
-                "button", "press", {"entity_id": stop_button}, blocking=True
+        """Turn off the car's own charge switch. Shared by all callers."""
+        car_switch = opts.get(CONF_CAR_CHARGE_SWITCH, "")
+        if not car_switch:
+            _LOGGER.warning(
+                "No car charge switch configured — refusing to stop charging"
             )
-        op_mode_entity = opts.get(CONF_CHARGER_OPERATION_MODE, "")
-        if op_mode_entity:
-            await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": op_mode_entity}, blocking=True
-            )
+            return
+        await self.hass.services.async_call(
+            "switch", "turn_off", {"entity_id": car_switch}, blocking=True
+        )
         # No priming here: the final sample in ``_update_statistics`` (right
         # after this) captures the interval since the last timer read.
         self._logbook_action("stop_charging")
 
-    async def _enforce_plug_in_guard(self, plan: helper.Plan, opts: dict) -> None:
+    async def _enforce_plug_in_guard(self, plan: helper.Plan) -> None:
         """In Live mode, stop a plug-in auto-start outside the planned window.
 
         The plan itself cannot do this: before the first planned session its
@@ -1007,13 +1042,18 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         (pure — see ``helper.connection_guard_step``) and executes the one
         resulting stop, in Live mode only.
 
-        No charger-mode sensor configured, or a missing/unknown sensor
-        value: the guard has nothing to stand on and stays hands-off.
+        The state machine runs on the car's own charging sensor (per-car
+        identity and plug-in edges), while ``_is_connected`` must also hold:
+        the car has to be home and plugged into the home box for anything —
+        guard stops included — to be written. No car charging sensor
+        configured, or a missing/unknown sensor value: the guard has nothing
+        to stand on and stays hands-off.
         """
         if self._mode != MODE_LIVE:
             return
-        mode_entity = opts.get(CONF_CHARGER_MODE_SENSOR, "")
-        mode_state = self._charger_mode_state(mode_entity)
+        opts = self.options
+        car_entity = opts.get(CONF_CAR_CHARGING_SENSOR, "")
+        mode_state = self._car_charging_state(car_entity)
         if mode_state is None:
             # Transient gap (or missing sensor): keep the guard's last known
             # state instead of resetting it. Resetting would make the next
@@ -1022,10 +1062,10 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             # misread as a manual start instead of being stopped.
             if self._guard.prev_mode_state is not None and not self._guard_gap_warned:
                 _LOGGER.warning(
-                    "Plug-in guard idle: charger mode sensor %r is "
+                    "Plug-in guard idle: car charging sensor %r is "
                     "unavailable — keeping last known state, auto-start "
                     "outside the plan is not stopped while the gap lasts",
-                    mode_entity,
+                    car_entity,
                 )
                 self._guard_gap_warned = True
             return
@@ -1046,23 +1086,29 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         if self._guard.manual_override and not prev_manual_override:
             self._logbook_action("manual_override_outside_plan")
         if step.action == helper.GUARD_STOP:
+            if not self._is_connected(self.options):
+                # Not our car on the home box (away, on a foreign charger, or
+                # another car plugged in): never stop it.
+                self._guard.prev_mode_state = mode_state
+                self._guard.plug_in_at = step.plug_in_at
+                return
             await self._press_stop(opts)
             _LOGGER.info(
                 "Plug-in guard: stopped auto-started charge outside the plan"
             )
 
-    async def _maybe_act(self, plan: helper.Plan) -> None:
-        """In Live mode, drive the charger toward the desired next action.
+    async def _maybe_act(self, plan: helper.Plan, opts: dict) -> None:
+        """In Live mode, drive the car's charge switch toward the desired next action.
 
         The plan itself is always built (every mode previews it), so this is
         the single safety gate for writes: a car that does not report as
-        connected never sees a ``turn_on``/``turn_off``/``press`` — the plan
-        simply previews until the cable goes in.
+        home-and-connected (away, on a foreign charger, another car on the
+        home box, or no cable in) never sees a ``turn_on``/``turn_off`` — the
+        plan simply previews until our car is home and plugged in.
         """
         if self._mode != MODE_LIVE:
             return
-        opts = self.options
-        if not self._is_connected(opts.get(CONF_CHARGER_MODE_SENSOR, "")):
+        if not self._is_connected(opts):
             return
         na = plan.next_action
         if na is None:
@@ -1114,18 +1160,18 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             return
         self._last_action_signature = signature
 
-        op_mode_entity = opts.get(CONF_CHARGER_OPERATION_MODE, "")
-        resume_button = opts.get(CONF_CHARGER_RESUME_BUTTON, "")
+        car_switch = opts.get(CONF_CAR_CHARGE_SWITCH, "")
 
         if want_on:
-            if op_mode_entity:
-                await self.hass.services.async_call(
-                    "switch", "turn_on", {"entity_id": op_mode_entity}, blocking=True
+            if not car_switch:
+                _LOGGER.warning(
+                    "Plan wants charging but no car charge switch is "
+                    "configured — refusing to start charging"
                 )
-            if resume_button:
-                await self.hass.services.async_call(
-                    "button", "press", {"entity_id": resume_button}, blocking=True
-                )
+                return
+            await self.hass.services.async_call(
+                "switch", "turn_on", {"entity_id": car_switch}, blocking=True
+            )
             # Baseline the energy source now so the first live sample after the
             # charger starts (up to one recompute period later) can accrue the
             # energy consumed in between.

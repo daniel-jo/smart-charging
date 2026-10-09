@@ -3,14 +3,13 @@
     "step": {
       "user": {
         "title": "Smart Charging",
-        "description": "Select entities for price data, battery SOC and charger control.",
+        "description": "Select entities for price data, battery SOC and car control.",
         "data": {
           "spot_prices_entity": "Spot price forecast sensor",
           "soc_entity": "Car battery SOC sensor (0-100 %)",
-          "charger_operation_mode_entity": "Charger operation mode switch",
-          "charger_resume_button_entity": "Resume charging button",
-          "charger_stop_button_entity": "Stop charging button",
-          "charger_mode_sensor_entity": "Charger mode sensor",
+          "car_charge_switch_entity": "Car charge switch (start/stop charging)",
+          "car_charging_sensor_entity": "Car charging state sensor (identity + plug-in edge)",
+          "charger_mode_sensor_entity": "Home charger mode sensor (home + plugged gate)",
           "charger_energy_sensor_entity": "Charging energy sensor (kWh, optional - for live statistics)"
         }
       },
@@ -48,10 +47,9 @@
         "data": {
           "spot_prices_entity": "Spot price forecast sensor",
           "soc_entity": "Car battery SOC sensor (0-100 %)",
-          "charger_operation_mode_entity": "Charger operation mode switch",
-          "charger_resume_button_entity": "Resume charging button",
-          "charger_stop_button_entity": "Stop charging button",
-          "charger_mode_sensor_entity": "Charger mode sensor",
+          "car_charge_switch_entity": "Car charge switch (start/stop charging)",
+          "car_charging_sensor_entity": "Car charging state sensor (identity + plug-in edge)",
+          "charger_mode_sensor_entity": "Home charger mode sensor (home + plugged gate)",
           "charger_energy_sensor_entity": "Charging energy sensor (kWh, optional - for live statistics)"
         }
       },

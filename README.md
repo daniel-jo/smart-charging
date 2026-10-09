@@ -1,8 +1,9 @@
 # Smart Charging — plan-based EV charging for Home Assistant
 
 > ⚠️ This integration is the **brain** that decides *when* and *how much* to
-> charge your EV based on spot prices and the car's battery state. It
-> **never** writes the load current (`available_current`) — that is the sole
+> charge your EV based on spot prices and the car's battery state. It writes
+> only your car's own charge switch (`switch.<car>_charge`, on/off) and
+> **never** the load current (`available_current`) — that is the sole
 > domain of your load-balancing automation/blueprint (e.g. the svenakela
 > charger-balancing blueprint).
 
@@ -55,13 +56,18 @@ hacs.json                           HACS metadata
 5. Follow the two-step setup:
    1. **Entities** — pick the **Spot price forecast sensor**
       (`sensor.spot_price_<AREA>_forecast`), your **car battery SOC sensor**
-      (0–100 %), the charger's operation mode switch, resume/stop buttons
-      and the charger mode sensor.
+      (0–100 %), the **car charge switch** (`switch.<car>_charge`, start/stop),
+      the **car charging state sensor** (`sensor.<car>_charging`, identity +
+      plug-in edge) and the **home charger mode sensor**
+      (`sensor.*_charger_mode`, home + plugged gate).
    2. **Parameters** — set the battery limits and preferences below.
 6. The integration starts in **Planläge (test)** mode — see below.
 
-> ⚠️ v2.0 is a clean break: if you upgrade from 1.x, delete the old entry and
-> add it again (only the entity IDs are preserved by the contract).
+In Live, nothing is ever written unless **both** gates hold: the home charger
+reports a car — *home and plugged* — **and** your car reports anything but
+`disconnected` on its own charging sensor — *this* car, not a guest car on
+the box, and not your car on a foreign charger. Miss either and only the plan
+previews; no `switch.turn_on`/`turn_off` happens.
 
 ### Parameters
 
@@ -133,16 +139,17 @@ itself, and it is always built (in every mode), even while the car is
 disconnected. A disconnected car in **Live** still gets its sessions and
 calendar events; only the action is neutralised, and the missing cable stays
 visible in the summary (`Ej inkopplad — …`), with the decision sensor at
-`none`. Only **Live** writes to the charger (operation-mode switch +
-resume/stop buttons), and only for a car that reports as connected: the
-connection check lives where the writes happen (`_maybe_act`), never in the
+`none`. Only **Live** writes to the car (its own charge switch on/off), and
+only for a car that reports as home-and-connected: the write gate lives
+where the writes happen (`_maybe_act` + the plug-in guard), never in the
 plan itself.
 
-"Connected" means the cable is physically in — `connected_requesting`,
-`connected_charging` **and** `connected_finished` (plugged but idle, e.g.
-after a finished or stopped session). `unknown` / `unavailable` are *not*
-treated as unplugged: the last known connection status is kept instead, so a
-transient read gap can neither turn the plan empty nor stop a running charge.
+"Home-and-connected" needs two independent readings: the home charger says a
+cable is in (`connected_requesting`, `connected_charging` **and**
+`connected_finished`) *and* your car's own charging sensor says anything but
+`disconnected` (`charging`, `starting`, `stopped`, `complete`, `no_power`).
+The home side proves the car is on *your* box; the car side proves it is *your*
+car (not a guest car, and not your car on a foreign charger).
 
 ### Plug-in guard (Live): the car may not auto-start outside the plan
 
@@ -150,11 +157,11 @@ Many cars begin charging the moment the cable goes in — even before the
 cheap night window. The plan alone cannot stop that (before the first
 session its action is `resume`), so Live keeps a small plug-in guard:
 
-- On the **plug-in edge** (the charger-mode sensor leaves `disconnected`)
-  a **120 s grace window** starts.
+- On the **plug-in edge** (your car's charging sensor leaves
+  `disconnected`) a **120 s grace window** starts.
 - Charging that **appears inside the grace window, outside any planned
   session**, is treated as the car's **auto-start** and is **stopped once**
-  (`stop` button + operation switch off, logged in the logbook).
+  (car charge switch off, logged in the logbook).
 - Charging that appears **after the window** is treated as a **manual user
   start**: `manual_override` (a plan-sensor attribute) is set and the
   integration **backs off entirely** — the plan still previews, but no
@@ -169,8 +176,10 @@ session its action is `resume`), so Live keeps a small plug-in guard:
   known state (warned once per gap) instead of resetting it, so a later
   plug-in edge is still detected — a sensor blip can no longer turn a
   plug-in auto-start into an untouchable "manual" charge.
-- Without a configured charger-mode sensor the guard has nothing to stand
-  on and stays hands-off (a warning is logged).
+- Without a configured car charging sensor the guard has nothing to stand
+  on and stays hands-off (a warning is logged). Guard stops additionally
+  never fire unless the home charger reports a car — so a foreign charger
+  session (or a guest car on your box) is never stopped.
 
 A scheduled `resume` is additionally **never executed before its time**
 (`next_action.at`). Once the window opens the dispatcher makes sure charging
@@ -272,9 +281,9 @@ battery capacity per session, same architecture as the energy accrual). The
 `soc` or `simulation`).
 
 > **Note:** with a cumulative energy sensor, the first ~≤15 min of a session
-> (between pressing *resume* and the next plan recompute) are usually included
-> thanks to a baseline sampled at resume time — but energy consumed before the
-> integration first detects the charge may be missed.
+> (between switching the car *on* and the next plan recompute) are usually
+> included thanks to a baseline sampled at resume time — but energy consumed
+> before the integration first detects the charge may be missed.
 
 ### Reset
 
@@ -330,8 +339,8 @@ python3 dryrun.py --weekly-full           # demo the weekly 100 % boost
 
 - Entity IDs: `sensor.smart_charging_plan`, `sensor.smart_charging_decision`,
   `select.smart_charging_mode`, `calendar.smart_charging_plan`.
-- **Writes**: only `switch.*_charger_operation_mode` (turn_on/off) and
-  `button.*_resume_charging` / `button.*_stop_charging_final` (press).
+- **Writes**: only the car's own charge switch (`switch.*_charge`,
+  turn_on/off).
 - **Never writes**: `number.*_available_current` — that belongs to the
   load-balancing blueprint.
 

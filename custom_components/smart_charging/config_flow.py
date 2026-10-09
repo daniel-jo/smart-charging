@@ -2,8 +2,8 @@
 
 Set-up is two steps:
 
-1. **Entities** — spot-price forecast sensor, SOC sensor and charger control
-   entities.
+1. **Entities** — spot-price forecast sensor, SOC sensor, the car's own
+   charge switch/charging sensor and the home charger's mode sensor.
 2. **Parameters** — battery limits (min/max SOC), capacity, max charger
    power, price currency, the weekly 100 % boost and — when the car has
    regular away-times — the away-window plus daily consumption.
@@ -25,12 +25,11 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_CAR_CHARGE_SWITCH,
+    CONF_CAR_CHARGING_SENSOR,
     CONF_CHARGER_ENERGY_SENSOR,
     CONF_CHARGER_MAX_KW,
     CONF_CHARGER_MODE_SENSOR,
-    CONF_CHARGER_OPERATION_MODE,
-    CONF_CHARGER_RESUME_BUTTON,
-    CONF_CHARGER_STOP_BUTTON,
     CONF_CURRENCY,
     CONF_DAILY_CONSUMPTION_PCT,
     CONF_MAX_SOC,
@@ -67,6 +66,8 @@ from .const import (
 # OptionsFlowWithReload only exists on Home Assistant >= 2025.9; fall back to
 # the plain OptionsFlow on older core so the integration always imports.
 # (The operating-mode key lives in ``const`` as ``CONF_MODE``.)
+# Upgrades are a clean break (delete the entry, add it again) so there is no
+# config-entry migration: the old box-control keys are simply ignored.
 _OptionsFlowBase = getattr(
     config_entries, "OptionsFlowWithReload", config_entries.OptionsFlow
 )
@@ -90,11 +91,20 @@ def _auto_detect_charger_mode(entity_ids: list[str]) -> Optional[str]:
     return matches[0] if matches else None
 
 
-def _auto_detect_operation_mode(entity_ids: list[str]) -> Optional[str]:
+def _auto_detect_car_charge_switch(entity_ids: list[str]) -> Optional[str]:
     matches = [
         eid
         for eid in entity_ids
-        if eid.startswith("switch.") and "operation_mode" in eid
+        if eid.startswith("switch.") and eid.endswith("_charge")
+    ]
+    return matches[0] if matches else None
+
+
+def _auto_detect_car_charging_sensor(entity_ids: list[str]) -> Optional[str]:
+    matches = [
+        eid
+        for eid in entity_ids
+        if eid.startswith("sensor.") and eid.endswith("_charging")
     ]
     return matches[0] if matches else None
 
@@ -129,17 +139,13 @@ def _entities_schema(current: dict[str, Any]) -> vol.Schema:
                 default=_entity_option(current.get(CONF_SOC_ENTITY, "")),
             ): selector.selector({"entity": {"domain": "sensor"}}),
             vol.Optional(
-                CONF_CHARGER_OPERATION_MODE,
-                default=_entity_option(current.get(CONF_CHARGER_OPERATION_MODE, "")),
+                CONF_CAR_CHARGE_SWITCH,
+                default=_entity_option(current.get(CONF_CAR_CHARGE_SWITCH, "")),
             ): selector.selector({"entity": {"domain": "switch"}}),
             vol.Optional(
-                CONF_CHARGER_RESUME_BUTTON,
-                default=_entity_option(current.get(CONF_CHARGER_RESUME_BUTTON, "")),
-            ): selector.selector({"entity": {"domain": "button"}}),
-            vol.Optional(
-                CONF_CHARGER_STOP_BUTTON,
-                default=_entity_option(current.get(CONF_CHARGER_STOP_BUTTON, "")),
-            ): selector.selector({"entity": {"domain": "button"}}),
+                CONF_CAR_CHARGING_SENSOR,
+                default=_entity_option(current.get(CONF_CAR_CHARGING_SENSOR, "")),
+            ): selector.selector({"entity": {"domain": "sensor"}}),
             vol.Optional(
                 CONF_CHARGER_MODE_SENSOR,
                 default=_entity_option(current.get(CONF_CHARGER_MODE_SENSOR, "")),
@@ -309,7 +315,7 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: Optional[dict[str, Any]] = None
     ) -> FlowResult:
-        """Step 1: select entities (prices, SOC and charger controls)."""
+        """Step 1: select entities (prices, SOC, car switch and sensors)."""
         errors: dict[str, str] = {}
         if user_input is not None:
             self._entity_data = dict(user_input)
@@ -324,7 +330,8 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         current = {
             CONF_SPOT_PRICES_ENTITY: _auto_detect_spot_prices(entity_ids),
             CONF_CHARGER_MODE_SENSOR: _auto_detect_charger_mode(entity_ids),
-            CONF_CHARGER_OPERATION_MODE: _auto_detect_operation_mode(entity_ids),
+            CONF_CAR_CHARGE_SWITCH: _auto_detect_car_charge_switch(entity_ids),
+            CONF_CAR_CHARGING_SENSOR: _auto_detect_car_charging_sensor(entity_ids),
         }
         return self.async_show_form(
             step_id="user",
@@ -437,9 +444,8 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
             for key in (
                 CONF_SPOT_PRICES_ENTITY,
                 CONF_SOC_ENTITY,
-                CONF_CHARGER_OPERATION_MODE,
-                CONF_CHARGER_RESUME_BUTTON,
-                CONF_CHARGER_STOP_BUTTON,
+                CONF_CAR_CHARGE_SWITCH,
+                CONF_CAR_CHARGING_SENSOR,
                 CONF_CHARGER_MODE_SENSOR,
                 CONF_CHARGER_ENERGY_SENSOR,
             )

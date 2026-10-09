@@ -102,8 +102,8 @@ README.md
   `["Av", "Planläge (test)", "Live"]`.
 - Calendar entity: `calendar.smart_charging_plan` — every planned session
   becomes a calendar event visible in HA's built-in Calendar view.
-- The integration **writes** only `switch.*_charger_operation_mode` (turn_on/off)
-  and `button.*_resume_charging` / `button.*_stop_charging_final` (press).
+- The integration **writes** only the car's own charge switch
+  (`switch.*_charge`, turn_on/off).
 - The integration **never** writes `number.*_available_current` (that is the
   load-balancing blueprint's sole domain).
 - `helper.py` must stay free of Home Assistant imports (unit-testable / dry-run

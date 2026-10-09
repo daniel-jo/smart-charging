@@ -21,10 +21,9 @@ MODE_LABELS = {
 CONF_MODE = "mode"  # persisted operating mode (off / plan / live)
 CONF_SPOT_PRICES_ENTITY = "spot_prices_entity"
 CONF_SOC_ENTITY = "soc_entity"
-CONF_CHARGER_OPERATION_MODE = "charger_operation_mode_entity"
-CONF_CHARGER_RESUME_BUTTON = "charger_resume_button_entity"
-CONF_CHARGER_STOP_BUTTON = "charger_stop_button_entity"
-CONF_CHARGER_MODE_SENSOR = "charger_mode_sensor_entity"
+CONF_CAR_CHARGE_SWITCH = "car_charge_switch_entity"  # car's own on/off switch
+CONF_CAR_CHARGING_SENSOR = "car_charging_sensor_entity"  # car identity + edge
+CONF_CHARGER_MODE_SENSOR = "charger_mode_sensor_entity"  # home + plugged gate
 CONF_CHARGER_ENERGY_SENSOR = "charger_energy_sensor_entity"
 # --- usage (continuous usage / away-window) -------------------------------------
 CONF_USAGE_ENABLED = "usage_enabled"
@@ -72,14 +71,20 @@ DEFAULT_ASSUMED_SOC = 50.0
 DEFAULT_STATS_SAMPLE_SECONDS = 60
 
 # --- charger_mode sensor states ------------------------------------------------
-# The zaptec sensor.*_charger_mode uses the native Zaptec values in lower
-# case (Zaptec integration >= 0.8):
+# The home charger's ``sensor.*_charger_mode`` uses the native Zaptec values in
+# lower case (Zaptec integration >= 0.8):
 #   disconnected, connected_requesting, connected_charging,
 #   connected_finished, unknown, ...
-# The mapping to a boolean lives in ``helper.connected_from_mode_state`` —
-# cable in (``connected_requesting`` / ``connected_charging`` /
+# In v2+ the box is no longer controlled; this sensor is read-only proof that
+# a car is home and plugged into the home box. The mapping to a boolean lives
+# in ``helper.connected_from_mode_state`` — cable in
+# (``connected_requesting`` / ``connected_charging`` /
 # ``connected_finished``) counts as connected; ``unknown`` / ``unavailable``
 # keep the last known value instead of flipping to "not connected".
+#
+# The car's own charging state (e.g. Tesla Fleet's
+# ``sensor.<car>_charging``) is mapped to the same canonical states by
+# ``helper.normalize_car_charging_state`` so the guard keeps working.
 
 # --- plug-in guard (Live) ----------------------------------------------------
 # Grace (seconds) after a plug-in edge (disconnected -> plugged) during which

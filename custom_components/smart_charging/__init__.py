@@ -6,8 +6,8 @@ charging decisions based on spot prices and configurable thresholds.
 Contracts (never break):
 - Entity IDs: ``sensor.smart_charging_plan``, ``sensor.smart_charging_decision``,
   ``calendar.smart_charging_plan``, ``select.smart_charging_mode``.
-- **Writes**: only ``switch.*_charger_operation_mode`` (turn_on/off) and
-  ``button.*_resume_charging`` / ``button.*_stop_charging_final`` (press).
+- **Writes**: only ``switch.*_charge`` (the car's own charge switch,
+  turn_on/off).
 - **Never writes**: ``number.*_available_current`` — that is the sole domain of
   the load-balancing blueprint.
 """
