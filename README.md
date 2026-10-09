@@ -165,11 +165,17 @@ session its action is `resume`), so Live keeps a small plug-in guard:
 - Charging **inside a planned session** is never touched, and nothing is
   ever issued from the very first observation (e.g. right after an HA
   restart), so an ongoing charge is never killed blindly.
+- A transient `unknown` / `unavailable` sensor read keeps the guard's last
+  known state (warned once per gap) instead of resetting it, so a later
+  plug-in edge is still detected — a sensor blip can no longer turn a
+  plug-in auto-start into an untouchable "manual" charge.
 - Without a configured charger-mode sensor the guard has nothing to stand
   on and stays hands-off (a warning is logged).
 
 A scheduled `resume` is additionally **never executed before its time**
-(`next_action.at`), and never once `max_soc` is reached (the weekly 100 %
+(`next_action.at`). Once the window opens the dispatcher makes sure charging
+is **on** for the whole session (the plan then reads `none` with reason
+`charging`/`boost`), and never once `max_soc` is reached (the weekly 100 %
 boost, which deliberately charges past `max_soc` on its own window, is the
 only exception).
 

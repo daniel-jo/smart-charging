@@ -165,6 +165,11 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         # post-plug-in grace window and the manual override (user runs the
         # show until charging stops or the cable is unplugged).
         self._guard = helper.ConnectionGuard()
+        # Latched "warned about the sensor gap" flag: a transient
+        # ``unknown``/``unavailable`` charger-mode read keeps the guard's last
+        # known state (so a later plug-in edge is still detected), but the
+        # warning is logged only once per gap, not on every recompute.
+        self._guard_gap_warned: bool = False
         # Last known connection status (``True`` when nothing is known yet):
         # a transient ``unknown``/``unavailable`` charger-mode read keeps this
         # instead of flipping to "not connected".
@@ -1010,14 +1015,21 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         mode_entity = opts.get(CONF_CHARGER_MODE_SENSOR, "")
         mode_state = self._charger_mode_state(mode_entity)
         if mode_state is None:
-            if self._guard.prev_mode_state is not None:
+            # Transient gap (or missing sensor): keep the guard's last known
+            # state instead of resetting it. Resetting would make the next
+            # valid read look like "first observation ever", which swallows
+            # the plug-in edge — and a later auto-start would then be
+            # misread as a manual start instead of being stopped.
+            if self._guard.prev_mode_state is not None and not self._guard_gap_warned:
                 _LOGGER.warning(
                     "Plug-in guard idle: charger mode sensor %r is "
-                    "unavailable — auto-start outside the plan is not stopped",
+                    "unavailable — keeping last known state, auto-start "
+                    "outside the plan is not stopped while the gap lasts",
                     mode_entity,
                 )
-            self._guard.prev_mode_state = None
+                self._guard_gap_warned = True
             return
+        self._guard_gap_warned = False
         prev_manual_override = self._guard.manual_override
         step = helper.connection_guard_step(
             mode_state=mode_state,
@@ -1068,7 +1080,14 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
                 )
             return
 
-        if na.action == "resume":
+        # The plan wants charging ON both *before* the window (``resume``) and
+        # *inside* it (``none`` with reason ``charging``/``boost``). A resumed
+        # plan flips ``resume`` -> ``none`` the very instant the session
+        # starts, so driving only off ``resume`` can never start a charge on
+        # schedule (the boundary timer fires exactly then).
+        want_on = helper.wants_charging(plan)
+
+        if want_on:
             # Belt-and-braces: never resume once the normal cap is reached
             # (the plan builder already emits stop/complete here). The weekly
             # 100 % boost is the plan's own intent and is exempt.
@@ -1098,7 +1117,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         op_mode_entity = opts.get(CONF_CHARGER_OPERATION_MODE, "")
         resume_button = opts.get(CONF_CHARGER_RESUME_BUTTON, "")
 
-        if na.action == "resume":
+        if want_on:
             if op_mode_entity:
                 await self.hass.services.async_call(
                     "switch", "turn_on", {"entity_id": op_mode_entity}, blocking=True

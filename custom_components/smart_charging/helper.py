@@ -806,6 +806,9 @@ def compute_plan(
 # - On the very first observation (the coordinator has no previous state,
 #   e.g. right after an HA restart) nothing is ever issued — an ongoing,
 #   possibly manual, charge must never be killed blindly.
+# - A transient ``unknown``/``unavailable`` read keeps the last known state
+#   (the coordinator never feeds it into the step), so a later plug-in edge
+#   is still detected instead of being swallowed as "first observation".
 
 
 @dataclass
@@ -839,13 +842,12 @@ def connection_guard_step(
     """Decide whether to stop an out-of-window charge.
 
     ``mode_state`` is the raw charger-mode sensor value (lower-cased Zaptec
-    states, ``None`` when the sensor is missing or unknown). ``in_session``
-    is True while a planned session covers the current moment. Never issues
-    ``GUARD_STOP`` for charging that is already covered by the plan.
-
-    The states ``"unknown"``/``"unavailable"`` are treated as *not* plugged
-    and reset the guard (plug_in_at/override move on below), so the next
-    clean observation starts from a known edge.
+    states). ``None`` (the sensor is missing or unknown) never reaches this
+    step from the coordinator — it keeps the last known state instead — so a
+    ``None`` here behaves exactly like the very first observation: set a
+    baseline, never act. ``in_session`` is True while a planned session
+    covers the current moment. Never issues ``GUARD_STOP`` for charging that
+    is already covered by the plan.
     """
     plugged = mode_state in PLUGGED_STATES
 
@@ -918,6 +920,25 @@ def pending_resume_at(plan: Plan) -> Optional[datetime]:
     if plan.next_action.action != "resume" or plan.next_action.at is None:
         return None
     return plan.next_action.at
+
+
+def wants_charging(plan: Plan) -> bool:
+    """True when the dispatcher should make sure charging is ON.
+
+    The planner expresses "charge now" in two ways: ``resume`` (the next
+    session still lies ahead) and ``none`` with reason ``charging``/``boost``
+    (``now`` is already inside the first planned session). The dispatcher
+    must act on both: a ``resume`` flips to ``none`` the very instant the
+    session starts, so listening only for ``resume`` can never start a
+    charge on schedule. ``connected``/``manual_override`` gating still lives
+    in the dispatcher — this is only the plan's own intent.
+    """
+    if plan is None or plan.next_action is None:
+        return False
+    action = plan.next_action.action
+    if action == "resume":
+        return True
+    return action == "none" and plan.next_action.reason in ("charging", "boost")
 
 
 def session_boundaries(plan: Plan) -> list[datetime]:

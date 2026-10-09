@@ -427,6 +427,32 @@ def test_next_action_resume_boost_reason():
     assert plan.next_action.at == boosts[0].start
 
 
+def test_wants_charging_true_for_future_resume():
+    now = BASE - timedelta(hours=2)  # 22:00 → first session at 00:00
+    plan = _cp(price_hours=_day_night_prices(days=2), now=now)
+    assert plan.next_action.action == "resume"
+    assert helper.wants_charging(plan) is True
+
+
+def test_wants_charging_true_inside_planned_session():
+    now = BASE + timedelta(minutes=1)  # inside the 00:00–03:00 session
+    plan = _cp(price_hours=_day_night_prices(days=2), now=now)
+    assert plan.next_action.action == "none"
+    assert plan.next_action.reason == "charging"
+    assert helper.wants_charging(plan) is True
+
+
+def test_wants_charging_false_for_stop_and_none_off():
+    plan = _cp(mode=helper._MODE_OFF)
+    assert plan.next_action.action == "none"
+    assert plan.next_action.reason == "off"
+    assert helper.wants_charging(plan) is False
+    plan = _cp(price_hours=_day_night_prices(days=2), soc_now=85.0, max_soc=80.0)
+    assert plan.next_action.action == "stop"
+    assert helper.wants_charging(plan) is False
+    assert helper.wants_charging(None) is False
+
+
 def test_summary_shows_currency():
     plan = _cp(price_hours=_day_night_prices(days=2), currency="SEK")
     assert "SEK/kWh" in plan.summary
@@ -1038,7 +1064,10 @@ def test_plug_in_guard_unplug_resets():
     assert (step.plug_in_at, step.manual_override) == (None, False)
 
 
-def test_plug_in_guard_unknown_state_resets_and_stays_hands_off():
+def test_plug_in_guard_unknown_state_never_acts():
+    # ``None`` never reaches the step from the coordinator (it keeps the last
+    # known state instead) — but if it ever did, it must behave like the very
+    # first observation: baseline, never act.
     step = _guard_step(
         mode_state=None,
         prev_mode_state="connected_charging",
@@ -1049,6 +1078,31 @@ def test_plug_in_guard_unknown_state_resets_and_stays_hands_off():
     )
     assert step.action == helper.GUARD_NONE
     assert (step.plug_in_at, step.manual_override) == (None, False)
+
+
+def test_plug_in_guard_kept_baseline_still_detects_plug_in_edge():
+    # The coordinator keeps the last known state across a transient sensor
+    # gap: a plug-in right after an ``unknown`` blip must still be caught.
+    plugged = _now(12)
+    requesting = _guard_step(
+        mode_state="connected_requesting",
+        prev_mode_state="disconnected",  # kept across the gap, not reset
+        now=plugged,
+        in_session=False,
+        plug_in_at=None,
+        manual_override=False,
+    )
+    assert requesting.action == helper.GUARD_NONE
+    assert requesting.plug_in_at == plugged
+    started = _guard_step(
+        mode_state="connected_charging",
+        prev_mode_state="connected_requesting",
+        now=plugged + timedelta(seconds=5),
+        in_session=False,
+        plug_in_at=requesting.plug_in_at,
+        manual_override=requesting.manual_override,
+    )
+    assert started.action == helper.GUARD_STOP
 
 
 def test_plug_in_guard_finished_counts_as_plugged_no_action():
