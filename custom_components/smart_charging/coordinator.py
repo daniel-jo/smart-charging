@@ -1107,11 +1107,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             # could be on the box), so report only "not configured" here.
             self._guard_gap_warned = False
             self._plug_gap_warned = False
-            baseline = (
-                mode_state
-                if mode_state is not None
-                else (helper.plug_fallback_state(plug_now) if plug_now else None)
-            )
+            baseline = helper.guard_baseline_state(mode_state, plug_now)
             if baseline is not None and plug_now is not None:
                 self._guard.prev_plugged = plug_now
             self._guard.prev_mode_state = baseline

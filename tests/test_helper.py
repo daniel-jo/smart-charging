@@ -1201,6 +1201,20 @@ def test_plug_fallback_state_is_idle_only():
     assert helper.plug_fallback_state(False) == "disconnected"
 
 
+def test_guard_baseline_state_keeps_cable_out_as_edge_source():
+    # "Cable out" must become a baseline, or the later plug-in edge is
+    # swallowed and an auto-start is misread as a manual start.
+    assert helper.guard_baseline_state(None, False) == "disconnected"
+    assert helper.guard_baseline_state(None, True) == "connected_finished"
+    # The car sensor wins whenever it is readable (per-car identity).
+    assert (
+        helper.guard_baseline_state("connected_charging", False)
+        == "connected_charging"
+    )
+    # Nothing known at all — no baseline.
+    assert helper.guard_baseline_state(None, None) is None
+
+
 def test_plug_in_guard_fallback_keeps_edge_during_car_sensor_gap():
     # Baseline: car away with a known cable reading.
     away = _now(12)

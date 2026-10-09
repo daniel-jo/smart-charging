@@ -138,6 +138,23 @@ def plug_fallback_state(plugged: bool) -> str:
     return "connected_finished" if plugged else "disconnected"
 
 
+def guard_baseline_state(
+    mode_state: Optional[str], plug_now: Optional[bool]
+) -> Optional[str]:
+    """First known state for the plug-in guard (its baseline).
+
+    The car sensor wins whenever it is readable (per-car identity). Otherwise
+    a known cable reading is enough — including "cable out" (``False``), so a
+    later plug-in still becomes a plug-in edge. ``None`` only when nothing at
+    all is known.
+    """
+    if mode_state is not None:
+        return mode_state
+    if plug_now is not None:
+        return plug_fallback_state(plug_now)
+    return None
+
+
 # Plug-in guard actions (see ``connection_guard_step``).
 GUARD_NONE = "none"
 GUARD_STOP = "stop"
