@@ -60,5 +60,10 @@ class SmartChargingModeSelect(CoordinatorEntity, SelectEntity):
         rev = {v: k for k, v in MODE_LABELS.items()}
         mode = rev.get(option, "off")
         await self.coordinator.async_set_mode(mode)
-        self._attr_current_option = option
+        # Read back from the coordinator (not the requested option) so the
+        # displayed state can never go stale if the switch is ever refused.
+        self._attr_current_option = MODE_LABELS.get(
+            self.coordinator.mode,  # type: ignore[union-attr]
+            MODE_LABELS["off"],
+        )
         self.async_write_ha_state()

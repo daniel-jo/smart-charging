@@ -100,7 +100,14 @@ def _as_float(value: Any, default: float) -> float:
 
 
 def resolve_options(entry: ConfigEntry) -> dict:
-    """Resolve effective options (entry data first, options override)."""
+    """Resolve effective options (entry data first, options override).
+
+    Runtime-owned keys (``mode`` and ``last_full_charge``, persisted by the
+    coordinator into ``entry.data``) are never honoured from the ``options``
+    mapping: the options flow snapshots ``entry.data`` on every save, so an
+    older ``options`` snapshot would otherwise shadow the fresher value with
+    a stale one (e.g. a saved ``plan`` mode shadowing a live one).
+    """
     options = {
         CONF_SPOT_PRICES_ENTITY: entry.data.get(CONF_SPOT_PRICES_ENTITY, ""),
         CONF_SOC_ENTITY: entry.data.get(CONF_SOC_ENTITY, ""),
@@ -131,6 +138,9 @@ def resolve_options(entry: ConfigEntry) -> dict:
         CONF_CURRENCY: entry.data.get(CONF_CURRENCY, DEFAULT_CURRENCY),
     }
     options.update(entry.options)
+    # Runtime-owned keys live in ``entry.data`` only (see docstring).
+    options.pop(CONF_MODE, None)
+    options.pop(CONF_LAST_FULL_CHARGE, None)
     return options
 
 
@@ -930,9 +940,14 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         self._last_full_charge = when
         data = dict(self._entry.data)
         data[CONF_LAST_FULL_CHARGE] = dt_util.as_utc(when).isoformat()
-        self.hass.async_create_task(
+        # NB: ``async_update_entry`` is a synchronous ``@callback`` (it
+        # returns a bool) — it must NOT be wrapped in ``async_create_task``
+        # (which needs a coroutine and would raise ``TypeError``).
+        try:
             self.hass.config_entries.async_update_entry(self._entry, data=data)
-        )
+        except Exception:  # noqa: BLE001
+            # Persistence must never break the plan update that called us.
+            _LOGGER.exception("Failed to persist last full charge")
 
     def _persist_mode(self, mode: str) -> None:
         """Remember the operating mode across restarts (memory + config entry).
@@ -943,14 +958,21 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         mode, leaving the car's auto-start outside the plan unstopped. There
         is no config-entry update listener registered, so this write causes
         no reload of its own — it is a plain persistence save.
+
+        NB: ``async_update_entry`` is a synchronous ``@callback`` (it
+        returns a bool) — it must NOT be wrapped in ``async_create_task``
+        (which needs a coroutine and would raise ``TypeError``, aborting
+        the mode switch and leaving the select entity in a stale state).
         """
         if self._entry.data.get(CONF_MODE) == mode:
             return
         data = dict(self._entry.data)
         data[CONF_MODE] = mode
-        self.hass.async_create_task(
+        try:
             self.hass.config_entries.async_update_entry(self._entry, data=data)
-        )
+        except Exception:  # noqa: BLE001
+            # Persistence must never break the mode switch that called us.
+            _LOGGER.exception("Failed to persist mode %r", mode)
 
     # ------------------------------------------------------------------
     # Live actions & logbook

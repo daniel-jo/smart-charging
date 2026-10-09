@@ -66,8 +66,8 @@ README.md
 
 - Every changeset gets a version bump before the work is left uncommitted —
   code, test and doc-only changes alike. Bump `version` in **both**
-  `custom_components/spot_price/manifest.json` and
-  `custom_components/spot_price/const.py` (`VERSION` constant); the two must
+  `custom_components/smart_charging/manifest.json` and
+  `custom_components/smart_charging/const.py` (`VERSION` constant); the two must
   always match.
 - Size the bump to the change (semver, from whatever version the working tree
   currently carries):
@@ -77,8 +77,8 @@ README.md
     scheduling or behaviour improvements, new API support.
   - **patch** — bug fixes, internal refactors, test and doc-only changes.
 - Bump only once per uncommitted changeset. Check
-  `git diff HEAD -- custom_components/spot_price/manifest.json
-  custom_components/spot_price/const.py`: if the version(s) already differ
+  `git diff HEAD -- custom_components/smart_charging/manifest.json
+  custom_components/smart_charging/const.py`: if the version(s) already differ
   from the last commit, a bump is pending for this batch — leave it alone. The
   next bump happens on the first change made after the pending one is committed.
 
