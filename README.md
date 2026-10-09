@@ -56,20 +56,19 @@ hacs.json                           HACS metadata
 5. Follow the two-step setup:
    1. **Entities** — pick the **Spot price forecast sensor**
       (`sensor.spot_price_<AREA>_forecast`), your **car battery SOC sensor**
-      (0–100 %), the **car charge switch** (`switch.<car>_charge`, start/stop),
-      the **car charging state sensor** (`sensor.<car>_charging`, identity +
-      plug-in edge), the optional **charging cable sensor**
-      (`binary_sensor`/sensor, plug-in fallback for sleeping-car gaps) and
-      the **home charger mode sensor**
-      (`sensor.*_charger_mode`, home + plugged gate).
+      (0–100 %), the **car charge switch** (`switch.<car>_charge`, start/stop)
+      and the **home charger mode sensor**
+      (`sensor.*_charger_mode`, guard + write gate — required).
    2. **Parameters** — set the battery limits and preferences below.
 6. The integration starts in **Planläge (test)** mode — see below.
 
-In Live, nothing is ever written unless **both** gates hold: the home charger
-reports a car — *home and plugged* — **and** your car reports anything but
-`disconnected` on its own charging sensor — *this* car, not a guest car on
-the box, and not your car on a foreign charger. Miss either and only the plan
-previews; no `switch.turn_on`/`turn_off` happens.
+In Live, nothing is ever written unless **the home charger gate** holds: the
+home box reports a car — *home and plugged* (`connected_requesting`,
+`connected_charging` or `connected_finished`). Miss it and only the plan
+previews; no `switch.turn_on`/`turn_off` happens. The car's own charging
+state is never used for this — a car integration polls the maker's cloud
+minutes apart and gives stale/wrong data, so the always-online box is the
+sole source.
 
 ### Parameters
 
@@ -146,26 +145,30 @@ only for a car that reports as home-and-connected: the write gate lives
 where the writes happen (`_maybe_act` + the plug-in guard), never in the
 plan itself.
 
-"Home-and-connected" needs two independent readings: the home charger says a
-cable is in (`connected_requesting`, `connected_charging` **and**
-`connected_finished`) *and* your car's own charging sensor says anything but
-`disconnected` (`charging`, `starting`, `stopped`, `complete`, `no_power`).
-The home side proves the car is on *your* box; the car side proves it is *your*
-car (not a guest car, and not your car on a foreign charger).
-
 ### Plug-in guard (Live): the car may not auto-start outside the plan
 
 Many cars begin charging the moment the cable goes in — even before the
 cheap night window. The plan alone cannot stop that (before the first
 session its action is `resume`), so Live keeps a small plug-in guard:
 
-- On the **plug-in edge** (your car's charging sensor leaves
-  `disconnected`) a **120 s grace window** starts. If the car sensor goes
-  `unknown` / `unavailable` (e.g. a sleeping car), the optional **charging
-  cable sensor** (`binary_sensor`/sensor, e.g.
-  `binary_sensor.<car>_laddningskabel`) fills in plug-in edges: a known
-  cable reading becomes the guard's cable state, but never "charging" — only
-  the car sensor can confirm that, so the fallback alone can never stop.
+"Home-and-connected" needs the home charger box: it must report a car in
+(`connected_requesting`, `connected_charging` **and**
+`connected_finished`) for anything — the plan's dispatch and the plug-in
+guard alike — to write to the car. The car integrations themselves are
+never used for this: they poll the maker's cloud minutes apart and give
+stale/wrong data, so both the gate and the guard run on the always-online
+box.
+
+### Plug-in guard (Live): the car may not auto-start outside the plan
+
+Many cars begin charging the moment the cable goes in — even before the
+cheap night window. The plan alone cannot stop that (before the first
+session its action is `resume`), so Live keeps a small plug-in guard driven
+by the home charger box (`sensor.*_charger_mode`), which is always online
+and reports in near real time:
+
+- On the **plug-in edge** (the box leaves `disconnected`) a **120 s grace
+  window** starts.
 - Charging that **appears inside the grace window, outside any planned
   session**, is treated as the car's **auto-start** and is **stopped once**
   (car charge switch off, logged in the logbook).
@@ -179,15 +182,17 @@ session its action is `resume`), so Live keeps a small plug-in guard:
 - Charging **inside a planned session** is never touched, and nothing is
   ever issued from the very first observation (e.g. right after an HA
   restart), so an ongoing charge is never killed blindly.
-- A transient `unknown` / `unavailable` sensor read keeps the guard's last
+- A transient `unknown` / `unavailable` box read keeps the guard's last
   known state (warned once per gap) instead of resetting it, so a later
   plug-in edge is still detected — a sensor blip can no longer turn a
   plug-in auto-start into an untouchable "manual" charge.
-- Without a configured car charging sensor the guard has nothing to stand
-  on and stays hands-off (a warning is logged — once the guard knows the
-  sensor exists it also warns while the reading is missing). Guard stops
-  additionally never fire unless the home charger reports a car — so a
-  foreign charger session (or a guest car on your box) is never stopped.
+- Without a configured home charger mode sensor the guard has nothing to
+  stand on and stays hands-off (a warning is logged — once the guard knows
+  the sensor exists it also warns while the reading is missing).
+- The car's own charging state is never used — car integrations poll the
+  maker's cloud (Tesla Fleet: every 10 minutes, 15 when the car sleeps) and
+  give stale/wrong data, so the guard would misclassify auto-starts as
+  manual starts on car data alone.
 
 A scheduled `resume` is additionally **never executed before its time**
 (`next_action.at`). Once the window opens the dispatcher makes sure charging

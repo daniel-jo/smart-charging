@@ -58,36 +58,6 @@ PLUGGED_STATES = frozenset(
 )
 CHARGING_STATES = frozenset({"connected_charging"})
 
-def normalize_car_charging_state(charging_state: Optional[str]) -> Optional[str]:
-    """Map the car's own charging state to the canonical guard states.
-
-    Tesla Fleet (and similar car integrations) report e.g. ``charging``,
-    ``starting``, ``stopped``, ``complete``, ``no_power`` or ``disconnected`` —
-    per-car readings that already scope the plan to one specific car. The
-    plug-in guard only understands box-shaped canonical values, so map them to
-    the same states: plugged-but-idle car values become
-    ``connected_finished`` and charging values become ``connected_charging``.
-
-    ``None`` means "no reliable reading" (missing sensor, ``unknown``,
-    ``unavailable`` or an empty value) — callers must keep their last known
-    value instead of treating a read gap as "unplugged".
-    """
-    if charging_state is None:
-        return None
-    value = charging_state.strip().lower()
-    if value in ("", "unknown", "unavailable"):
-        return None
-    mapping = {
-        "disconnected": "disconnected",
-        "stopped": "connected_finished",
-        "complete": "connected_finished",
-        "nopower": "connected_finished",
-        "no_power": "connected_finished",
-        "starting": "connected_charging",
-        "charging": "connected_charging",
-    }
-    return mapping.get(value)
-
 
 def connected_from_mode_state(mode_state: Optional[str]) -> Optional[bool]:
     """Connected tri-state from a raw charger-mode value.
@@ -107,52 +77,20 @@ def connected_from_mode_state(mode_state: Optional[str]) -> Optional[bool]:
     return value in PLUGGED_STATES
 
 
-def plugged_from_cable_state(state: Optional[str]) -> Optional[bool]:
-    """Cable-in state from a charging-cable sensor, or ``None``.
+def guard_source_state(
+    box_configured: bool, box_state: Optional[str]
+) -> tuple[Optional[str], Optional[bool]]:
+    """The plug-in guard's sole source: the home charger box's state.
 
-    The optional plug fallback (e.g. Tesla Fleet's
-    ``binary_sensor.<car>_laddningskabel``, device_class connectivity) reports
-    the physical cable: on means the cable is in, off means it is out.
-    ``None`` covers "not configured", a missing entity, ``unknown`` /
-    ``unavailable`` and anything unrecognized — callers must keep their last
-    known value instead of treating a read gap as "unplugged".
+    The always-online box never sleeps and reports in near real time. A car
+    integration polls the maker's cloud minutes apart and gives stale/wrong
+    data, so the car sensors are never used — ``(None, None)`` when no box is
+    configured or the box gives no reading. The guard then keeps its last
+    known state and never acts on nothing (see ``connection_guard_step``).
     """
-    if state is None:
-        return None
-    value = state.strip().lower()
-    if value in ("on", "true", "1", "yes", "ja"):
-        return True
-    if value in ("off", "false", "0", "no", "nej"):
-        return False
-    return None
-
-
-def plug_fallback_state(plugged: bool) -> str:
-    """Canonical guard state for a known cable reading (sensor-gap fill).
-
-    Lets the plug-in guard register plug-in edges while the car's own
-    charging sensor is ``unknown``/``unavailable``: a cable-in reading becomes
-    an idle-but-plugged state (never "charging" — only the car sensor can
-    confirm that, so the fallback alone can never stop).
-    """
-    return "connected_finished" if plugged else "disconnected"
-
-
-def guard_baseline_state(
-    mode_state: Optional[str], plug_now: Optional[bool]
-) -> Optional[str]:
-    """First known state for the plug-in guard (its baseline).
-
-    The car sensor wins whenever it is readable (per-car identity). Otherwise
-    a known cable reading is enough — including "cable out" (``False``), so a
-    later plug-in still becomes a plug-in edge. ``None`` only when nothing at
-    all is known.
-    """
-    if mode_state is not None:
-        return mode_state
-    if plug_now is not None:
-        return plug_fallback_state(plug_now)
-    return None
+    if not box_configured:
+        return None, None
+    return box_state, connected_from_mode_state(box_state)
 
 
 # Plug-in guard actions (see ``connection_guard_step``).
@@ -895,7 +833,7 @@ class ConnectionGuard:
     """Live plug-in guard state, carried across recomputes by the coordinator."""
 
     prev_mode_state: Optional[str] = None  # last seen raw charger-mode value
-    prev_plugged: Optional[bool] = None  # last known cable-in state
+    prev_plugged: Optional[bool] = None  # last known box-derived plugged state
     plug_in_at: Optional[datetime] = None  # start of the current grace window
     manual_override: bool = False  # user runs the show until stop/unplug
 
@@ -905,7 +843,7 @@ class ConnectionGuardStep:
     """One guard evaluation: action + the state the coordinator must keep."""
 
     action: str  # GUARD_NONE | GUARD_STOP
-    plugged: Optional[bool]  # effective cable-in state after this step
+    plugged: Optional[bool]  # effective box-derived plugged state after this step
     plug_in_at: Optional[datetime] = None
     manual_override: bool = False
 
@@ -924,30 +862,24 @@ def connection_guard_step(
 ) -> ConnectionGuardStep:
     """Decide whether to stop an out-of-window charge.
 
-    ``mode_state`` is the canonical charger/car state produced by either a raw
-    box-mode value or :func:`normalize_car_charging_state` applied to the
-    car's own charging state. ``None`` (the sensor is missing or unknown)
-    never reaches this step from the coordinator — it keeps the last known
-    state instead — so a ``None`` here behaves exactly like the very first
-    observation: set a baseline, never act. ``in_session`` is True while a
-    planned session covers the current moment. Never issues ``GUARD_STOP``
-    for charging that is already covered by the plan.
+    ``mode_state`` is the canonical charger-box state (``sensor.*_charger_mode``):
+    the box is the guard's sole source, so it is always present here (the
+    coordinator keeps its last known state instead of feeding a read gap).
+    A ``None`` here behaves exactly like the very first observation: set a
+    baseline, never act. ``in_session`` is True while a planned session
+    covers the current moment. Never issues ``GUARD_STOP`` for charging that
+    is already covered by the plan.
 
-    ``plugged_now`` is the optional plug fallback (a cable sensor, e.g. a
-    charging-cable binary_sensor): a known cable reading is the effective
-    cable-in state when the car sensor is missing or unknown, so plug-in
-    edges survive gaps. When the car sensor is merely unknown, only the
-    edge is refreshed — charging is never confirmed by the fallback alone,
-    so ``GUARD_STOP`` needs a real ``connected_charging`` reading.
-    ``prev_plugged`` is the last effective cable-in state; it starts as
-    ``None`` (unknown) and is kept whenever both sources are unknown.
+    ``plugged_now`` is the effective box-derived plugged state and
+    ``prev_plugged`` its last known value; when a reading is missing the step
+    derives them from the box states instead, so plug-in edges survive gaps.
     """
     sensor_plugged = mode_state in PLUGGED_STATES if mode_state else None
     plugged = plugged_now if plugged_now is not None else sensor_plugged
     charging = bool(mode_state) and mode_state in CHARGING_STATES
 
-    # Previous effective cable state: prefer the bool, fall back to the
-    # legacy string baseline for callers that only track prev_mode_state.
+    # Previous effective plugged state: prefer the carried bool, else derive
+    # it from the previous box state.
     if prev_plugged is not None:
         prev: Optional[bool] = prev_plugged
     elif prev_mode_state is None:

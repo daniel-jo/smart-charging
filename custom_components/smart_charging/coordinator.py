@@ -1,8 +1,8 @@
 """Coordinator for the Smart Charging integration.
 
 Event-driven: listens to state changes on the configured input entities
-(spot prices forecast, car switch, car charging sensor, charger mode, mode
-select) plus a periodic tick, throttles recomputes, and updates the plan. In
+(spot prices forecast, car switch, charger mode, mode select) plus a
+periodic tick, throttles recomputes, and updates the plan. In
 Live mode it calls the car's charge switch services when the desired next
 action changes.
 
@@ -33,7 +33,6 @@ from .const import (
     CONF_ASSUMED_SOC,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_CAR_CHARGE_SWITCH,
-    CONF_CAR_CHARGING_SENSOR,
     CONF_CHARGER_ENERGY_SENSOR,
     CONF_CHARGER_MAX_KW,
     CONF_CHARGER_MODE_SENSOR,
@@ -44,7 +43,6 @@ from .const import (
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
     CONF_MODE,
-    CONF_PLUG_SENSOR,
     CONF_SOC_ENTITY,
     CONF_SOC_STALE_HOURS,
     CONF_SPOT_PRICES_ENTITY,
@@ -112,8 +110,6 @@ def resolve_options(entry: ConfigEntry) -> dict:
         CONF_SPOT_PRICES_ENTITY: entry.data.get(CONF_SPOT_PRICES_ENTITY, ""),
         CONF_SOC_ENTITY: entry.data.get(CONF_SOC_ENTITY, ""),
         CONF_CAR_CHARGE_SWITCH: entry.data.get(CONF_CAR_CHARGE_SWITCH, ""),
-        CONF_CAR_CHARGING_SENSOR: entry.data.get(CONF_CAR_CHARGING_SENSOR, ""),
-        CONF_PLUG_SENSOR: entry.data.get(CONF_PLUG_SENSOR, ""),
         CONF_CHARGER_MODE_SENSOR: entry.data.get(CONF_CHARGER_MODE_SENSOR, ""),
         CONF_CHARGER_ENERGY_SENSOR: entry.data.get(CONF_CHARGER_ENERGY_SENSOR, ""),
         CONF_USAGE_ENABLED: entry.data.get(CONF_USAGE_ENABLED, DEFAULT_USAGE_ENABLED),
@@ -166,17 +162,13 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         # show until charging stops or the cable is unplugged).
         self._guard = helper.ConnectionGuard()
         # Latched "warned about the sensor gap" flag: a transient
-        # ``unknown``/``unavailable`` car charging read keeps the guard's last
+        # ``unknown``/``unavailable`` box read keeps the guard's last
         # known state (so a later plug-in edge is still detected), but the
         # warning is logged only once per gap, not on every recompute.
         self._guard_gap_warned: bool = False
-        # Same latch for the optional cable fallback: only warns once per gap
-        # (or once ever while unconfigured — the plug sensor is optional, so
-        # a missing fallback warns at most once, not on every recompute).
-        self._plug_gap_warned: bool = False
         # Last known connection status (``True`` when nothing is known yet):
-        # a transient ``unknown``/``unavailable`` read on either the home
-        # charger's mode sensor or the car's charging sensor keeps this
+        # a transient ``unknown``/``unavailable`` read on the home
+        # charger's mode sensor keeps this
         # instead of flipping to "not connected".
         self._last_connected: bool = True
         self._mode: str = str(entry.data.get(CONF_MODE, MODE_PLAN))
@@ -495,6 +487,9 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             # Stale intent dies: a manual override from another mode must
             # never leak in, and an unknown guard state keeps hands off.
             self._guard = helper.connection_guard_reset_on_mode()
+            # A mode switch starts a fresh guard episode: re-arm the
+            # once-per-gap warning so Live warns again if needed.
+            self._guard_gap_warned = False
         self._mode = mode
         self._persist_mode(mode)
         await self.async_request_refresh()
@@ -511,8 +506,6 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             opts.get(CONF_SPOT_PRICES_ENTITY, ""),
             opts.get(CONF_SOC_ENTITY, ""),
             opts.get(CONF_CAR_CHARGE_SWITCH, ""),
-            opts.get(CONF_CAR_CHARGING_SENSOR, ""),
-            opts.get(CONF_PLUG_SENSOR, ""),
             opts.get(CONF_CHARGER_MODE_SENSOR, ""),
         ]
 
@@ -843,83 +836,33 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             return None
         return value
 
-    def _car_charging_state(self, entity_id: str) -> Optional[str]:
-        """Canonical car charging state or ``None``.
-
-        Reads the car's own charging sensor (e.g. Tesla Fleet's
-        ``sensor.<car>_charging``) and maps it to the canonical guard states
-        via :func:`helper.normalize_car_charging_state`. ``None`` covers "not
-        configured", missing state, ``unknown`` and ``unavailable`` — all
-        cases where the guard has nothing to stand on and must keep the last
-        known state instead.
-        """
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state is None:
-            return None
-        return helper.normalize_car_charging_state(str(state.state))
-
-    def _plug_state(self, entity_id: str) -> Optional[bool]:
-        """Cable-in state from the optional plug fallback, or ``None``.
-
-        Wraps :func:`helper.plugged_from_cable_state` so the guard can tell
-        cable-out (``False``) from "no reading" (``None``). ``None`` also
-        covers "not configured" and missing/``unknown``/``unavailable``
-        states.
-        """
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state is None:
-            return None
-        return helper.plugged_from_cable_state(str(state.state))
-
     def _is_connected(self, opts: dict) -> bool:
         """Home-and-connected: safe to control this car at all?
 
-        - No car charging sensor and no home mode sensor: assume connected
-          (unchanged behaviour — the same optimism the planner has always
-          relied on).
-        - Home mode sensor configured: a car on the home box means the car is
-          home and plugged; ``unknown`` / ``unavailable`` / empty (a transient
-          read gap) keeps the last known value.
-        - Car charging sensor configured: the per-car identity gate. Any car
-          plugged into the home box counts as "home"; this counts as *our*
-          car only while it reports anything but ``disconnected``. Gaps keep
-          the last known value.
+        The home charger box is the sole gate: a car on the home box counts
+        as "home"; a box that reports anything but ``disconnected`` means a
+        car is plugged in. The car's own sensors are never used — they poll
+        the maker's cloud minutes apart and give stale/wrong data.
+
+        - No home box sensor: assume connected (unchanged behaviour — the
+          same optimism the planner has always relied on).
+        - Home box sensor configured: ``unknown`` / ``unavailable`` / empty
+          (a transient read gap) keeps the last known value.
         - Anything else (``disconnected``, errors, ...) is not connected —
-          the car is away, on a foreign charger, or another car is on the
-          home box, and nothing may be written to it.
+          nothing may be written.
         """
         home_entity = opts.get(CONF_CHARGER_MODE_SENSOR, "")
-        car_entity = opts.get(CONF_CAR_CHARGING_SENSOR, "")
-        if not home_entity and not car_entity:
+        if not home_entity:
             return True
-        if home_entity and self.hass.states.get(home_entity) is None:
+        if self.hass.states.get(home_entity) is None:
             return True
-        if car_entity and self.hass.states.get(car_entity) is None:
-            return True
-        candidate = True
-        if home_entity:
-            home_mapping = helper.connected_from_mode_state(
-                self._charger_mode_state(home_entity)
-            )
-            if home_mapping is None:
-                return self._last_connected
-            candidate = home_mapping
-            if not candidate:
-                self._last_connected = False
-                return False
-        if car_entity:
-            car_mapping = helper.connected_from_mode_state(
-                self._car_charging_state(car_entity)
-            )
-            if car_mapping is None:
-                return self._last_connected
-            candidate = candidate and car_mapping
-        self._last_connected = candidate
-        return candidate
+        home_mapping = helper.connected_from_mode_state(
+            self._charger_mode_state(home_entity)
+        )
+        if home_mapping is None:
+            return self._last_connected
+        self._last_connected = home_mapping
+        return home_mapping
 
     def _day_prices(self, entity_id: str) -> list[helper.DayPrice]:
         """Best-effort per-day price summaries from the ``days`` attribute."""
@@ -1078,101 +1021,77 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         (pure — see ``helper.connection_guard_step``) and executes the one
         resulting stop, in Live mode only.
 
-        The state machine runs on the car's own charging sensor (per-car
-        identity and plug-in edges), while ``_is_connected`` must also hold:
-        the car has to be home and plugged into the home box for anything —
-        guard stops included — to be written.
-
-        The optional plug fallback (a charging-cable sensor) survives gaps on
-        the car sensor: when the car sensor is ``unknown``/``unavailable`` but
-        the cable reading is known, a synthesized plug state keeps the
-        plug-in edge (and only the edge — never "charging", so a stale gap
-        reading cannot stop). Sensor and fallback contradicting (plugged cable
-        reading but the car sensor says "connected_charging") means the car
-        sensor is merely stale: the guard trusts it as before, and the plug
-        state is updated from the cable as well.
+        The state machine uses the always-online home charger box as its sole
+        source: the box never sleeps and reports in near real time, while a
+        car integration polls the maker's cloud minutes apart and gives
+        stale/wrong data — so the car's own sensors are never used.
+        ``_is_connected`` must also hold: the car has to be home and plugged
+        into the home box for anything — guard stops included — to be
+        written.
         """
         if self._mode != MODE_LIVE:
             return
         opts = self.options
-        car_entity = opts.get(CONF_CAR_CHARGING_SENSOR, "")
-        plug_entity = opts.get(CONF_PLUG_SENSOR, "")
-        mode_state = self._car_charging_state(car_entity)
-        plug_now = self._plug_state(plug_entity)
+        box_entity = opts.get(CONF_CHARGER_MODE_SENSOR, "")
+        mode_state, plug_now = helper.guard_source_state(
+            bool(box_entity), self._charger_mode_state(box_entity)
+        )
 
         if self._guard.prev_mode_state is None:
             # First known state ever (or nothing configured yet): set the
             # baseline and report, never act. A baseline that is nothing but
             # a fallback gap-fill is blind (no car identity — a foreign car
             # could be on the box), so report only "not configured" here.
-            self._guard_gap_warned = False
-            self._plug_gap_warned = False
-            baseline = helper.guard_baseline_state(mode_state, plug_now)
+            # The gap latches are re-armed only once a baseline exists: a
+            # persistent no-baseline episode must warn once, not on every
+            # recompute.
+            baseline = mode_state
+            if baseline is not None:
+                self._guard_gap_warned = False
             if baseline is not None and plug_now is not None:
                 self._guard.prev_plugged = plug_now
             self._guard.prev_mode_state = baseline
             if baseline is None and not self._guard_gap_warned:
-                if not car_entity:
+                if not box_entity:
                     _LOGGER.warning(
-                        "Plug-in guard idle: no car charging sensor configured "
-                        "(entry %s) — auto-start outside the plan is never "
-                        "stopped until one is set",
+                        "Plug-in guard idle: no charger-mode (box) sensor "
+                        "configured (entry %s) — auto-start outside the plan "
+                        "is never stopped until one is set",
                         self._entry.entry_id,
                     )
                 else:
                     _LOGGER.warning(
-                        "Plug-in guard idle: car charging sensor %r (and no "
-                        "known plug reading) — keeping no baseline, "
-                        "auto-start outside the plan is not stopped "
-                        "while the gap lasts (mode=%s, entry=%s)",
-                        car_entity,
+                        "Plug-in guard idle: charger-mode (box) sensor %r is "
+                        "unreadable — keeping no baseline, auto-start "
+                        "outside the plan is not stopped while the gap lasts "
+                        "(mode=%s, entry=%s)",
+                        box_entity,
                         self._mode,
                         self._entry.entry_id,
                     )
                 self._guard_gap_warned = True
-            elif (
-                plug_now is None
-                and baseline is not None
-                and not self._plug_gap_warned
-            ):
-                _LOGGER.warning(
-                    "Plug-in guard: no readable plug state from car charging "
-                    "sensor %r (entry %s) and no plug fallback — edge "
-                    "detection relies on the car sensor alone from here",
-                    car_entity,
-                    self._entry.entry_id,
-                )
-                self._plug_gap_warned = True
             return
 
         if mode_state is None and plug_now is None:
-            # Transient gap (or missing sensor): keep the guard's last known
-            # state instead of resetting it. Resetting would make the next
-            # valid read look like "first observation ever", which swallows
-            # the plug-in edge — and a later auto-start would then be
-            # misread as a manual start instead of being stopped.
+            # Transient box gap: keep the guard's last known state instead of
+            # resetting it. Resetting would make the next valid read look
+            # like "first observation ever", which swallows the plug-in edge
+            # — and a later auto-start would then be misread as a manual
+            # start instead of being stopped.
             if not self._guard_gap_warned:
                 _LOGGER.warning(
-                    "Plug-in guard idle: car charging sensor %r (entry %s) is "
-                    "unavailable — keeping last known state, auto-start "
-                    "outside the plan is not stopped while the gap lasts "
-                    "(mode=%s)",
-                    car_entity,
+                    "Plug-in guard idle: charger-mode (box) sensor %r (entry "
+                    "%s) is unreadable — keeping last known state, "
+                    "auto-start outside the plan is not stopped while the "
+                    "gap lasts (mode=%s)",
+                    box_entity,
                     self._entry.entry_id,
                     self._mode,
                 )
                 self._guard_gap_warned = True
             return
         self._guard_gap_warned = False
-        self._plug_gap_warned = False
         prev_manual_override = self._guard.manual_override
-
-        if mode_state is None:
-            # Car sensor in a read gap but the cable reading is known: run
-            # the step with a synthesized non-charging state (gap fill). The
-            # fallback can never confirm "charging", so this path only keeps
-            # the plug-in edge / clears overrides — it can never stop.
-            mode_state = helper.plug_fallback_state(bool(plug_now))
 
         step = helper.connection_guard_step(
             mode_state=mode_state,

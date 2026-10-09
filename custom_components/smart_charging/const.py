@@ -22,9 +22,7 @@ CONF_MODE = "mode"  # persisted operating mode (off / plan / live)
 CONF_SPOT_PRICES_ENTITY = "spot_prices_entity"
 CONF_SOC_ENTITY = "soc_entity"
 CONF_CAR_CHARGE_SWITCH = "car_charge_switch_entity"  # car's own on/off switch
-CONF_CAR_CHARGING_SENSOR = "car_charging_sensor_entity"  # car identity + edge
-CONF_PLUG_SENSOR = "plug_sensor_entity"  # cable-in fallback (binary_sensor/sensor)
-CONF_CHARGER_MODE_SENSOR = "charger_mode_sensor_entity"  # home + plugged gate
+CONF_CHARGER_MODE_SENSOR = "charger_mode_sensor_entity"  # home box: guard + write gate
 CONF_CHARGER_ENERGY_SENSOR = "charger_energy_sensor_entity"
 # --- usage (continuous usage / away-window) -------------------------------------
 CONF_USAGE_ENABLED = "usage_enabled"
@@ -83,9 +81,9 @@ DEFAULT_STATS_SAMPLE_SECONDS = 60
 # ``connected_finished``) counts as connected; ``unknown`` / ``unavailable``
 # keep the last known value instead of flipping to "not connected".
 #
-# The car's own charging state (e.g. Tesla Fleet's
-# ``sensor.<car>_charging``) is mapped to the same canonical states by
-# ``helper.normalize_car_charging_state`` so the guard keeps working.
+# The car's own charging state is no longer used — a car integration polls
+# the maker's cloud minutes apart and gives stale/wrong data, so the guard
+# and the write gate run on the always-online home charger box only.
 
 # --- plug-in guard (Live) ----------------------------------------------------
 # Grace (seconds) after a plug-in edge (disconnected -> plugged) during which

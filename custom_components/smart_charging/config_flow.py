@@ -26,7 +26,6 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_CAR_CHARGE_SWITCH,
-    CONF_CAR_CHARGING_SENSOR,
     CONF_CHARGER_ENERGY_SENSOR,
     CONF_CHARGER_MAX_KW,
     CONF_CHARGER_MODE_SENSOR,
@@ -36,7 +35,6 @@ from .const import (
     CONF_MIN_DAYS_BETWEEN_FULL,
     CONF_MIN_SOC,
     CONF_MODE,
-    CONF_PLUG_SENSOR,
     CONF_SOC_ENTITY,
     CONF_ASSUMED_SOC,
     CONF_SOC_STALE_HOURS,
@@ -101,15 +99,6 @@ def _auto_detect_car_charge_switch(entity_ids: list[str]) -> Optional[str]:
     return matches[0] if matches else None
 
 
-def _auto_detect_car_charging_sensor(entity_ids: list[str]) -> Optional[str]:
-    matches = [
-        eid
-        for eid in entity_ids
-        if eid.startswith("sensor.") and eid.endswith("_charging")
-    ]
-    return matches[0] if matches else None
-
-
 def _entity_option(value: Optional[str]) -> str:
     return value or ""
 
@@ -143,16 +132,6 @@ def _entities_schema(current: dict[str, Any]) -> vol.Schema:
                 CONF_CAR_CHARGE_SWITCH,
                 default=_entity_option(current.get(CONF_CAR_CHARGE_SWITCH, "")),
             ): selector.selector({"entity": {"domain": "switch"}}),
-            vol.Optional(
-                CONF_CAR_CHARGING_SENSOR,
-                default=_entity_option(current.get(CONF_CAR_CHARGING_SENSOR, "")),
-            ): selector.selector({"entity": {"domain": "sensor"}}),
-            vol.Optional(
-                CONF_PLUG_SENSOR,
-                default=_entity_option(current.get(CONF_PLUG_SENSOR, "")),
-            ): selector.selector(
-                {"entity": {"domain": ["binary_sensor", "sensor"]}}
-            ),
             vol.Optional(
                 CONF_CHARGER_MODE_SENSOR,
                 default=_entity_option(current.get(CONF_CHARGER_MODE_SENSOR, "")),
@@ -338,7 +317,6 @@ class SmartChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_SPOT_PRICES_ENTITY: _auto_detect_spot_prices(entity_ids),
             CONF_CHARGER_MODE_SENSOR: _auto_detect_charger_mode(entity_ids),
             CONF_CAR_CHARGE_SWITCH: _auto_detect_car_charge_switch(entity_ids),
-            CONF_CAR_CHARGING_SENSOR: _auto_detect_car_charging_sensor(entity_ids),
         }
         return self.async_show_form(
             step_id="user",
@@ -452,8 +430,6 @@ class SmartChargingOptionsFlow(_OptionsFlowBase):
                 CONF_SPOT_PRICES_ENTITY,
                 CONF_SOC_ENTITY,
                 CONF_CAR_CHARGE_SWITCH,
-                CONF_CAR_CHARGING_SENSOR,
-                CONF_PLUG_SENSOR,
                 CONF_CHARGER_MODE_SENSOR,
                 CONF_CHARGER_ENERGY_SENSOR,
             )

@@ -8,9 +8,7 @@
           "spot_prices_entity": "Spot price forecast sensor",
           "soc_entity": "Car battery SOC sensor (0-100 %)",
           "car_charge_switch_entity": "Car charge switch (start/stop charging)",
-          "car_charging_sensor_entity": "Car charging state sensor (identity + plug-in edge)",
-            "plug_sensor_entity": "Charging cable sensor (plug-in fallback, optional)",
-          "charger_mode_sensor_entity": "Home charger mode sensor (home + plugged gate)",
+          "charger_mode_sensor_entity": "Home charger mode sensor (guard + write gate — required)",
           "charger_energy_sensor_entity": "Charging energy sensor (kWh, optional - for live statistics)"
         }
       },
@@ -49,9 +47,7 @@
           "spot_prices_entity": "Spot price forecast sensor",
           "soc_entity": "Car battery SOC sensor (0-100 %)",
           "car_charge_switch_entity": "Car charge switch (start/stop charging)",
-            "plug_sensor_entity": "Charging cable sensor (plug-in fallback, optional)",
-          "car_charging_sensor_entity": "Car charging state sensor (identity + plug-in edge)",
-          "charger_mode_sensor_entity": "Home charger mode sensor (home + plugged gate)",
+          "charger_mode_sensor_entity": "Home charger mode sensor (guard + write gate — required)",
           "charger_energy_sensor_entity": "Charging energy sensor (kWh, optional - for live statistics)"
         }
       },
