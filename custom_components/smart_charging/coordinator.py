@@ -23,6 +23,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_START
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import event as ha_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -456,8 +457,22 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         # planned window once, and let a later manual start through. Runs
         # before the regular dispatch so the guard-stop is not mixed up with
         # the plan's own next-action handling.
-        await self._enforce_plug_in_guard(plan)
-        await self._maybe_act(plan, opts)
+        #
+        # Writes are best-effort: a rejected/failed switch command must never
+        # fail the whole coordinator refresh — that sets last_update_success
+        # to False and blanks every entity at once (Plan, Decision, Mode,
+        # calendar, stats) until the next successful refresh. The individual
+        # write paths already swallow HomeAssistantError; this is the last
+        # line of defence.
+        try:
+            await self._enforce_plug_in_guard(plan)
+            await self._maybe_act(plan, opts)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Charge-switch action failed; plan kept (mode=%s, entry=%s)",
+                self._mode,
+                self._entry.entry_id,
+            )
         self._schedule_boundary_timer(plan)
 
         # Remember the forecast for the off-recompute live sampling loop, then
@@ -994,6 +1009,23 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
     # Live actions & logbook
     # ------------------------------------------------------------------
+    def _car_switch_state(self, entity_id: str) -> Optional[str]:
+        """Current state of the car's charge switch (None when unreadable).
+
+        Read before every write so a redundant ``turn_on``/``turn_off`` is
+        never sent: some car integrations (notably Tesla Fleet) *reject* a
+        start command while the car is already charging
+        (``HomeAssistantError: Command was unsuccessful: is_charging``)
+        instead of no-op'ing it, and an unhandled rejection failed the whole
+        coordinator refresh — blanking every entity at once.
+        """
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        return state.state
+
     async def _press_stop(self, opts: dict) -> None:
         """Turn off the car's own charge switch. Shared by all callers."""
         car_switch = opts.get(CONF_CAR_CHARGE_SWITCH, "")
@@ -1005,9 +1037,20 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
                 self._entry.entry_id,
             )
             return
-        await self.hass.services.async_call(
-            "switch", "turn_off", {"entity_id": car_switch}, blocking=True
-        )
+        if self._car_switch_state(car_switch) == "off":
+            # Already stopped — a redundant turn_off is a no-op at best and a
+            # rejected command at worst; either way there is nothing to do.
+            return
+        try:
+            await self.hass.services.async_call(
+                "switch", "turn_off", {"entity_id": car_switch}, blocking=True
+            )
+        except HomeAssistantError as err:
+            # The stop did not go through (car cloud hiccup, rejected
+            # command, ...). Log it — but never let a write failure fail the
+            # whole coordinator refresh (which blanks every entity at once).
+            _LOGGER.warning("Could not stop charging via %s: %s", car_switch, err)
+            return
         # No priming here: the final sample in ``_update_statistics`` (right
         # after this) captures the interval since the last timer read.
         self._logbook_action("stop_charging")
@@ -1201,7 +1244,6 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
         signature = f"{na.action}|{na.at and na.at.isoformat() or ''}|{na.reason}"
         if signature == self._last_action_signature:
             return
-        self._last_action_signature = signature
 
         car_switch = opts.get(CONF_CAR_CHARGE_SWITCH, "")
 
@@ -1215,9 +1257,32 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
                     self._entry.entry_id,
                 )
                 return
-            await self.hass.services.async_call(
-                "switch", "turn_on", {"entity_id": car_switch}, blocking=True
-            )
+            if self._car_switch_state(car_switch) == "on":
+                # Already charging (car auto-start, manual start, or a write
+                # from an earlier run) — do not re-send turn_on. Some car
+                # integrations reject a redundant start with HomeAssistantError
+                # (Tesla Fleet: "Command was unsuccessful: is_charging"), and
+                # that rejection must never fail the whole refresh.
+                _LOGGER.debug(
+                    "Charging already on (%s) — skipping redundant turn_on",
+                    car_switch,
+                )
+                self._last_action_signature = signature
+                return
+            try:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": car_switch}, blocking=True
+                )
+            except HomeAssistantError as err:
+                # The start did not go through (car cloud hiccup, rejected
+                # command, ...). Log it and leave the signature unset so the
+                # next recompute retries — but never fail the refresh (which
+                # blanks every entity at once).
+                _LOGGER.warning(
+                    "Could not start charging via %s: %s", car_switch, err
+                )
+                return
+            self._last_action_signature = signature
             # Baseline the energy source now so the first live sample after the
             # charger starts (up to one recompute period later) can accrue the
             # energy consumed in between.
@@ -1225,6 +1290,7 @@ class SmartChargingCoordinator(DataUpdateCoordinator):
             self._logbook_action("resume_charging")
         elif na.action == "stop":
             await self._press_stop(opts)
+            self._last_action_signature = signature
 
     def _logbook(self, plan: helper.Plan) -> None:
         """Write a plan recompute line to the logbook."""
